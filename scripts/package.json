@@ -1,0 +1,10 @@
+{
+  "name": "meds-push",
+  "private": true,
+  "description": "Sends the Meds breakfast and dinner push reminders. Run by .github/workflows/push-reminders.yml.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}

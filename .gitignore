@@ -10,3 +10,4 @@ build/
 *.dSYM.zip
 *.dSYM
 .DS_Store
+node_modules/

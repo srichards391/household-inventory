@@ -2,7 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    # The repo's default branch is the Meds branch, so deploy from it as well as main.
+    branches: [main, claude/medication-tracking-app-6j4756]
   workflow_dispatch:
 
 permissions:

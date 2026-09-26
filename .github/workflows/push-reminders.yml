@@ -1,0 +1,53 @@
+name: Push reminders
+
+# Sends the breakfast and dinner push notifications to Meds.
+#
+# Times: MORNING_TIME and EVENING_TIME below are New York time. Cron is UTC, and New York is
+# UTC-4 in summer and UTC-5 in winter, so each reminder has two cron lines an hour apart.
+# scripts/send-push.mjs sends from whichever run lands near the target and skips the other.
+# The lines fire 5 minutes early because GitHub usually starts scheduled runs a bit late.
+#
+# To change a time, change BOTH the env value and its two cron lines:
+#   cron hour = target hour + 4 (summer line) and + 5 (winter line), minute = target minute - 5.
+#   08:00 -> '55 11' and '55 12'.   18:00 -> '55 21' and '55 22'.
+#
+# Scheduled runs only happen on the repo's default branch, and GitHub pauses them after
+# 60 days with no commits to the repo. If reminders stop, check the Actions tab.
+
+on:
+  schedule:
+    - cron: '55 11 * * *'   # morning, summer (EDT)
+    - cron: '55 12 * * *'   # morning, winter (EST)
+    - cron: '55 21 * * *'   # evening, summer (EDT)
+    - cron: '55 22 * * *'   # evening, winter (EST)
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: 'Send this reminder right now (test)'
+        required: true
+        type: choice
+        options: [morning, evening]
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: scripts/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: scripts
+      - run: node scripts/send-push.mjs
+        env:
+          MORNING_TIME: '08:00'
+          EVENING_TIME: '18:00'
+          FORCE_SLOT: ${{ inputs.slot }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          PUSH_SUBSCRIPTION: ${{ secrets.PUSH_SUBSCRIPTION }}
