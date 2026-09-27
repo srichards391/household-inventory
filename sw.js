@@ -1,65 +1,95 @@
 // Service worker: caches the app shell so Meds opens instantly and works offline,
 // and shows the breakfast and dinner push reminders sent by GitHub Actions.
-// Bump CACHE_VERSION whenever app files change so installed copies pick up the update.
-const CACHE_VERSION = 'meds-v1.1.0';
+//
+// Updates: bump CACHE_VERSION (and the ?v= below, and APP_VERSION in app.js) whenever app
+// files change. The browser notices this file changed, installs the new worker, and it takes
+// over at once (skipWaiting + claim); app.js then reloads the page onto the new code.
+const CACHE_VERSION = 'meds-v2.0.0';
+const DATA_CACHE = 'meds-data'; // the app's copy of your meds for reminder text; survives updates
 const SHELL = [
   './',
   './index.html',
-  './styles.css',
-  './config.js',
-  './sync-core.js',
-  './app.js',
+  './styles.css?v=2.0',
+  './config.js?v=2.0',
+  './sync-core.js?v=2.0',
+  './app.js?v=2.0',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',
 ];
 
+// Same dose logic as the app, for "Warfarin 8 mg" in the reminder.
+importScripts('./sync-core.js?v=2.0');
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE_VERSION)
+      .then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION && k !== DATA_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
-// Network first for the shell (so updates land), cache as the offline fallback.
-// Only our own files: sync talks to api.github.com and must never be served from cache.
+// Network first for our own files, always checking with the server rather than the
+// browser's HTTP cache, so a new release lands on the next open. The cache is only the
+// offline fallback. Requests to other sites (GitHub sync) and version.json are never touched.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
-  if (new URL(event.request.url).origin !== self.location.origin) return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin || url.pathname.endsWith('/version.json')) return;
   event.respondWith(
-    fetch(event.request)
+    fetch(new Request(event.request.url, { cache: 'no-cache', credentials: 'same-origin' }))
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, copy));
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, copy));
+        }
         return response;
       })
-      .catch(() => caches.match(event.request, { ignoreSearch: true }).then((hit) => hit || caches.match('./index.html')))
+      .catch(() => caches.match(event.request).then((hit) => hit || caches.match(event.request, { ignoreSearch: true })).then((hit) => hit || caches.match('./index.html')))
   );
 });
 
 // ---------- push reminders ----------
-// Sent by scripts/send-push.mjs as JSON: { slot, title, body, url }.
+// Sent by scripts/send-push.mjs as JSON: { slot, title, body, url }. The body from GitHub is
+// generic (GitHub can't see your meds), so it's replaced here with the meds and doses this
+// device has for that slot today. As-needed meds are never included.
 // Always show a notification: iOS turns push off for apps that receive one silently.
+async function reminderBody(slot, fallback) {
+  try {
+    if (!slot || !self.MedsSyncCore) return fallback;
+    const hit = await (await caches.open(DATA_CACHE)).match('./meds-data.json');
+    if (!hit) return fallback;
+    const Core = self.MedsSyncCore;
+    return Core.reminderBody(Core.migrate(await hit.json()), slot, Core.dayKeyOf(new Date()));
+  } catch (e) {
+    return fallback;
+  }
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { /* not JSON; use the defaults */ }
   const title = data.title || 'Meds';
-  event.waitUntil(self.registration.showNotification(title, {
-    body: data.body || 'Time for your meds. Tap to log.',
-    icon: './icons/icon-192.png',
-    badge: './icons/icon-192.png',
-    tag: `meds-${data.slot || 'reminder'}`,
-    renotify: true,
-    data: { url: data.url || './#today' },
-  }));
+  event.waitUntil((async () => {
+    const body = await reminderBody(data.slot, data.body || 'Time for your meds. Tap to log.');
+    await self.registration.showNotification(title, {
+      body,
+      icon: './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      tag: `meds-${data.slot || 'reminder'}`,
+      renotify: true,
+      data: { url: data.url || './#today' },
+    });
+  })());
 });
 
 // Tap: bring Meds forward on Today, or open it if it isn't running.

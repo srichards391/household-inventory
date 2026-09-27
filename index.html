@@ -13,7 +13,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=2.0">
 </head>
 <body>
   <header class="topbar">
@@ -38,18 +38,45 @@
       <label>Name
         <input name="name" type="text" required autocomplete="off" placeholder="e.g. Lisinopril">
       </label>
-      <label>Dose
+      <fieldset>
+        <legend>Type</legend>
+        <label class="check"><input type="radio" name="kind" value="scheduled"> Scheduled, with meals</label>
+        <label class="check"><input type="radio" name="kind" value="prn"> As needed (PRN): log it when you take it</label>
+      </fieldset>
+      <div id="sched-block">
+        <fieldset>
+          <legend>When</legend>
+          <label class="check"><input type="checkbox" name="morning"> Morning, with breakfast</label>
+          <label class="check"><input type="checkbox" name="evening"> Evening, with dinner</label>
+        </fieldset>
+        <fieldset>
+          <legend>Dose</legend>
+          <label class="check"><input type="radio" name="doseMode" value="same"> Same every day</label>
+          <label class="check"><input type="radio" name="doseMode" value="byDay"> Different by day of the week</label>
+        </fieldset>
+      </div>
+      <label id="dose-same-label"><span id="dose-same-text">Dose </span>
         <input name="dosage" type="text" autocomplete="off" placeholder="e.g. 10 mg, 1 tablet">
       </label>
-      <fieldset>
-        <legend>When</legend>
-        <label class="check"><input type="checkbox" name="morning"> Morning, with breakfast</label>
-        <label class="check"><input type="checkbox" name="evening"> Evening, with dinner</label>
-      </fieldset>
+      <div id="dose-byday" class="byday" hidden>
+        <label>Sunday<input name="d0" type="text" autocomplete="off"></label>
+        <label>Monday<input name="d1" type="text" autocomplete="off"></label>
+        <label>Tuesday<input name="d2" type="text" autocomplete="off"></label>
+        <label>Wednesday<input name="d3" type="text" autocomplete="off"></label>
+        <label>Thursday<input name="d4" type="text" autocomplete="off"></label>
+        <label>Friday<input name="d5" type="text" autocomplete="off"></label>
+        <label>Saturday<input name="d6" type="text" autocomplete="off"></label>
+        <div class="byday-summary" id="byday-summary" aria-live="polite"></div>
+      </div>
+      <label id="from-block">Dose or schedule changes start on
+        <input name="from" type="date">
+        <small>Earlier days keep the schedule they had. Doses already logged never change.</small>
+      </label>
       <label>Notes
         <textarea name="notes" rows="2" placeholder="Prescriber, pharmacy, why you take it..."></textarea>
       </label>
       <label class="check"><input type="checkbox" name="active" checked> Active (shows on Today)</label>
+      <div class="sched-history" id="sched-history"></div>
       <div class="form-actions">
         <button type="button" class="btn danger" id="med-delete" hidden>Delete</button>
         <span class="spacer"></span>
@@ -59,10 +86,31 @@
     </form>
   </dialog>
 
+  <!-- Log an as-needed dose -->
+  <dialog id="prn-dialog">
+    <form method="dialog" id="prn-form" class="form">
+      <h2 id="prn-title">Log dose</h2>
+      <p class="dialog-sub" id="prn-day"></p>
+      <label>Time taken
+        <input name="time" type="time">
+      </label>
+      <label>Dose
+        <input name="dose" type="text" autocomplete="off">
+      </label>
+      <div class="form-actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="prn-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Log</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="./config.js"></script>
-  <script src="./sync-core.js"></script>
-  <script src="./app.js"></script>
+  <!-- ?v= makes each release a new address, so no cache can hand back an older copy.
+       Bump with APP_VERSION in app.js (tests/dosing.test.js checks they match). -->
+  <script src="./config.js?v=2.0"></script>
+  <script src="./sync-core.js?v=2.0"></script>
+  <script src="./app.js?v=2.0"></script>
 </body>
 </html>

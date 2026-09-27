@@ -32,6 +32,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* rules like .form label { display: block } must not un-hide */
 html, body { margin: 0; padding: 0; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -158,7 +159,7 @@ h1, h2, h3 { margin: 0; }
 
 .form { padding: 0; }
 .form label { display: block; font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 12px; }
-.form input[type="text"], .form input[type="password"], .form input[type="time"], .form textarea {
+.form input[type="text"], .form input[type="password"], .form input[type="time"], .form input[type="date"], .form textarea {
   display: block; width: 100%; margin-top: 5px; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font-size: 16px;
 }
@@ -199,6 +200,34 @@ dialog h2 { font-size: 20px; margin-bottom: 14px; }
 .status.bad, .sync-error { color: var(--bad); }
 .sync-error { font-size: 14px; font-weight: 600; margin: -4px 0 8px; }
 .sync-error:empty { display: none; }
+/* Day-of-week doses, as-needed log, updates (v2.0) */
+.dose-row .meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.dose-row .meta .dose { font-weight: 700; color: var(--text); font-size: 15px; }
+.dose-row.taken .meta .dose { color: var(--muted); }
+.dose-note { color: var(--warn); font-weight: 600; }
+.form input[type="date"] {
+  display: block; width: 100%; margin-top: 5px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font-size: 16px;
+}
+.form label small { display: block; font-weight: 500; margin-top: 4px; }
+.byday { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin-bottom: 4px; }
+.byday label { margin-bottom: 8px; }
+.byday input { margin-top: 3px !important; }
+.byday-summary { grid-column: 1 / -1; font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
+.byday-summary:empty { display: none; }
+.sched-history { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 4px 0 8px; }
+.sched-history strong { color: var(--text); }
+.dialog-sub { margin: -8px 0 14px; color: var(--muted); font-size: 14px; }
+.prn-log .when { font-size: 13px; color: var(--good); font-weight: 600; }
+.prn-buttons { flex-wrap: wrap; justify-content: flex-start; }
+.prn-hist { grid-template-columns: auto 1fr auto; }
+.prn-list { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.update-banner {
+  position: sticky; top: 0; z-index: 20; display: flex; gap: 10px; align-items: center; justify-content: space-between;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px; background: var(--warn-soft); color: var(--warn);
+  font-weight: 600; font-size: 14px;
+}
+
 .code-box {
   display: block; width: calc(100% - 28px); margin: 0 14px; padding: 8px 10px;
   font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all;

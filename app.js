@@ -1,14 +1,17 @@
-/* Meds v1.1
+/* Meds v2.0
  * A single-file, no-build web app. Data lives in localStorage on this device and, if sync is
  * turned on, in an encrypted private GitHub Gist shared by your devices.
- * Sections: storage, date helpers, rendering per tab, medication form, sync, push,
- * calendar export, backup.
- * The data format and merge rule are documented at the top of sync-core.js.
+ * Sections: storage, date helpers, rendering per tab, medication form, as-needed log,
+ * sync, push, updates, calendar export, backup.
+ * The data format, dose schedules and merge rule are documented at the top of sync-core.js,
+ * which also holds the "which dose applies on which day" logic so it can be tested in Node.
  */
 (() => {
   'use strict';
 
-  const APP_VERSION = '1.1';
+  // When releasing: bump this, VERSION in sync-core.js, CACHE_VERSION in sw.js, version.json,
+  // and every ?v= in index.html and sw.js. tests/dosing.test.js fails if any disagree.
+  const APP_VERSION = '2.0';
   const STORE_KEY = 'meds.v2';
   const OLD_STORE_KEY = 'meds.v1'; // left in place after migrating, as a just-in-case copy
   const SYNC_KEY = 'meds.sync';    // token, passphrase, gist id. This device only: never synced or exported.
@@ -17,6 +20,15 @@
     { id: 'morning', title: 'Morning', meal: 'with breakfast', icon: '☀️', settingKey: 'breakfast', defaultTime: '08:00' },
     { id: 'evening', title: 'Evening', meal: 'with dinner', icon: '🌙', settingKey: 'dinner', defaultTime: '18:00' },
   ];
+
+  // Half-updated install (new page, old script, or the reverse): show nothing about doses.
+  // Mixed versions could compute a dose with the wrong rules.
+  if (!Core || Core.VERSION !== APP_VERSION) {
+    document.querySelector('#screen').innerHTML = `<div class="card update-card"><div class="empty"><strong>Meds didn't finish updating</strong>
+      Close Meds completely and open it again. On iPhone: swipe up from the bottom and hold, then swipe Meds away.
+      On Mac: press ⌘Q. If you still see this after reopening twice, wait 10 minutes and try again.</div></div>`;
+    throw new Error(`Version mismatch: app ${APP_VERSION}, core ${Core && Core.VERSION}`);
+  }
 
   // ---------- storage ----------
   let state = load();
@@ -44,6 +56,25 @@
     } catch (e) {
       toast('Could not save. Storage may be full or blocked.');
     }
+    mirrorForServiceWorker();
+  }
+
+  // The service worker can't read localStorage, but it builds the push reminder text
+  // ("Warfarin 8 mg") from this device's meds when a reminder arrives. So keep a copy of the
+  // meds and the last two days of logs where it can read it.
+  const DATA_CACHE = 'meds-data';
+  let mirrorTimer;
+  function mirrorForServiceWorker() {
+    if (!('caches' in window)) return;
+    clearTimeout(mirrorTimer);
+    mirrorTimer = setTimeout(async () => {
+      try {
+        const keep = new Set([todayKey(), dayKey(addDays(new Date(), -1))]);
+        const logs = Object.fromEntries(Object.entries(state.logs).filter(([k]) => keep.has(k.split('|')[0])));
+        const cache = await caches.open(DATA_CACHE);
+        await cache.put('./meds-data.json', new Response(JSON.stringify({ meds: state.meds, logs, settings: state.settings }), { headers: { 'Content-Type': 'application/json' } }));
+      } catch (e) { /* reminder falls back to the generic text */ }
+    }, 300);
   }
 
   // Save after a change you made, then sync it a couple of seconds later.
@@ -79,26 +110,31 @@
   }
 
   // ---------- derived data ----------
+  // Which meds are due, and at what dose, depends on the day: see slotMeds in sync-core.js.
   const byOrder = (a, b) => (a.order - b.order) || (a.id < b.id ? -1 : 1);
   const liveMeds = () => state.meds.filter((m) => !m.deleted).sort(byOrder); // everything except deleted
   const activeMeds = () => liveMeds().filter((m) => m.active);
-  const medsFor = (slot) => activeMeds().filter((m) => m[slot.id]);
-  const logKey = (key, slotId, medId) => `${key}|${slotId}|${medId}`;
+  const medsFor = (slot, key) => Core.slotMeds(state, slot.id, key); // [{ med, version, dose }] for that day
+  const logKey = Core.logKey;
   const takenAt = (key, slotId, medId) => (state.logs[logKey(key, slotId, medId)] || {}).takenAt || null;
   const isTaken = (key, slotId, medId) => Boolean(takenAt(key, slotId, medId));
 
   function slotStatus(key, slot) {
-    const meds = medsFor(slot);
-    const taken = meds.filter((m) => isTaken(key, slot.id, m.id)).length;
-    return { total: meds.length, taken };
+    const due = medsFor(slot, key);
+    const taken = due.filter((x) => isTaken(key, slot.id, x.med.id)).length;
+    return { total: due.length, taken };
   }
 
-  // Un-taking writes { takenAt: null } rather than deleting, so the undo reaches your other device.
-  function setTaken(key, slotId, medId, taken, when) {
+  // Taking saves the dose that applies that day with the log, so a later schedule edit can't
+  // change what the record says you took. Un-taking writes { takenAt: null } rather than
+  // deleting, so the undo reaches your other device.
+  function setTaken(key, slotId, medId, taken, when, dose) {
     const k = logKey(key, slotId, medId);
     const prev = state.logs[k];
     if (!taken && !(prev && prev.takenAt)) return;
-    state.logs[k] = { takenAt: taken ? (when || new Date()).toISOString() : null, updatedAt: stamp(prev && prev.updatedAt) };
+    state.logs[k] = taken
+      ? { takenAt: (when || new Date()).toISOString(), updatedAt: stamp(prev && prev.updatedAt), dose: dose || '' }
+      : { takenAt: null, updatedAt: stamp(prev && prev.updatedAt) };
     save();
   }
 
@@ -177,9 +213,10 @@
       return;
     }
 
+    const weekday = Core.WEEKDAY_NAMES[Core.weekdayOf(key)];
     for (const slot of SLOTS) {
-      const meds = medsFor(slot);
-      if (meds.length === 0) continue;
+      const due = medsFor(slot, key);
+      if (due.length === 0) continue;
       const { total, taken } = slotStatus(key, slot);
       const now = new Date();
       const overdue = isToday && taken < total && now > slotTime(slot, now);
@@ -194,22 +231,32 @@
           </div>
         </section>`);
 
-      for (const m of meds) {
+      for (const { med: m, version, dose } of due) {
         const shownTakenAt = takenAt(key, slot.id, m.id);
+        // Taken: show the dose saved with the log. Not taken: the dose scheduled for this date.
+        const shownDose = shownTakenAt ? Core.loggedDose(state, key, slot.id, m) : dose;
+        const byDay = Boolean(version.doseByDay);
+        const changed = shownTakenAt && shownDose !== dose;
+        const meta = [
+          shownDose ? `<span class="dose">${esc(shownDose)}</span>` : '',
+          byDay ? `<span class="pill">${esc(weekday)} dose</span>` : '',
+          changed ? `<span class="dose-note">schedule for this day now says ${esc(dose || 'no dose')}</span>` : '',
+        ].filter(Boolean).join(' ');
         const row = el(`
           <button class="dose-row ${shownTakenAt ? 'taken' : ''}" aria-pressed="${shownTakenAt ? 'true' : 'false'}">
             <span class="box">✓</span>
             <span class="body">
               <div class="name">${esc(m.name)}</div>
-              <div class="meta">${esc(m.dosage || '')}</div>
+              <div class="meta">${meta}</div>
             </span>
             ${shownTakenAt ? `<span class="when">${esc(shortTime(shownTakenAt))}</span>` : ''}
           </button>`);
         row.onclick = () => {
           // Act on what the screen showed, not on data a background sync may have changed since.
           // That way a tap always does what you meant: mark taken if it looked untaken, and the reverse.
+          // The dose saved is the one that was on screen.
           const nowTaken = !shownTakenAt;
-          setTaken(key, slot.id, m.id, nowTaken, stampFor(key, slot));
+          setTaken(key, slot.id, m.id, nowTaken, stampFor(key, slot), dose);
           if (nowTaken && navigator.vibrate) navigator.vibrate(10);
           render({ keepScroll: true });
         };
@@ -220,7 +267,7 @@
         const foot = el(`<div class="card-foot"><button class="btn primary">Take all ${slot.title.toLowerCase()} meds</button></div>`);
         foot.firstElementChild.onclick = () => {
           const when = stampFor(key, slot);
-          meds.forEach((m) => { if (!isTaken(key, slot.id, m.id)) setTaken(key, slot.id, m.id, true, when); });
+          due.forEach(({ med: m, dose }) => { if (!isTaken(key, slot.id, m.id)) setTaken(key, slot.id, m.id, true, when, dose); });
           toast(`${slot.title} meds logged`);
           render({ keepScroll: true });
         };
@@ -229,7 +276,45 @@
       screen.appendChild(card);
     }
 
-    screen.appendChild(el(`<div class="note">Tap a med to mark it taken. Tap again to undo. Use ‹ to log a day you forgot to record.</div>`));
+    renderPrnCard(key, isToday);
+
+    screen.appendChild(el(`<div class="note">Tap a med to mark it taken. Tap again to undo. Use ‹ to log a day you forgot to record. Doses shown are the ones scheduled for this date.</div>`));
+  }
+
+  // As-needed meds: not due, never missed. Log each dose when you take it, as often as needed.
+  function renderPrnCard(key, isToday) {
+    const meds = Core.prnMeds(state, key);
+    const logs = Core.prnLogs(state, key);
+    if (meds.length === 0 && logs.length === 0) return;
+    const card = el(`
+      <section class="card">
+        <div class="card-head"><h2>💊 As needed <span class="sub">${isToday ? 'log when you take one' : 'logged this day'}</span></h2></div>
+      </section>`);
+    const name = (id) => (state.meds.find((m) => m.id === id) || {}).name || 'Deleted med';
+    for (const l of logs.slice().reverse()) {
+      const row = el(`
+        <div class="list-row prn-log">
+          <div class="body"><div class="name">${esc(name(l.medId))}</div><div class="meta">${esc(l.dose || '')}</div></div>
+          <span class="when">${esc(shortTime(l.takenAt))}</span>
+          <button class="btn icon" title="Remove this dose" aria-label="Remove this dose">✕</button>
+        </div>`);
+      row.querySelector('button').onclick = () => {
+        if (!confirm(`Remove ${name(l.medId)} at ${shortTime(l.takenAt)}?`)) return;
+        state.logs[l.key] = { takenAt: null, updatedAt: stamp(state.logs[l.key].updatedAt) };
+        save(); render({ keepScroll: true });
+      };
+      card.appendChild(row);
+    }
+    if (meds.length) {
+      const foot = el(`<div class="card-foot prn-buttons"></div>`);
+      for (const m of meds) {
+        const b = el(`<button class="btn">+ ${esc(m.name)}</button>`);
+        b.onclick = () => openPrnForm(m, key);
+        foot.appendChild(b);
+      }
+      card.appendChild(foot);
+    }
+    screen.appendChild(card);
   }
 
   // ---------- Meds ----------
@@ -247,13 +332,15 @@
     }
 
     const card = el(`<div class="card"></div>`);
+    const today = todayKey();
     meds.forEach((m, i) => {
-      const when = [m.morning ? 'Breakfast' : null, m.evening ? 'Dinner' : null].filter(Boolean).join(' + ') || 'No schedule';
+      const upcoming = (m.schedule || []).find((v) => v.from > today);
       const row = el(`
         <div class="list-row ${m.active ? '' : 'inactive'}">
           <div class="body">
             <div class="name">${esc(m.name)} ${m.active ? '' : '<span class="pill off">Paused</span>'}</div>
-            <div class="meta">${esc(m.dosage || '')}${m.dosage ? ' · ' : ''}${when}</div>
+            <div class="meta">${esc(Core.scheduleSummary(Core.scheduleOn(m, today)))}</div>
+            ${upcoming ? `<div class="meta">From ${esc(friendlyDay(fromDayKey(upcoming.from)))}: ${esc(Core.scheduleSummary(upcoming))}</div>` : ''}
           </div>
           <div class="actions">
             <button class="btn icon" title="Move up" ${i === 0 ? 'disabled' : ''}>↑</button>
@@ -286,19 +373,49 @@
   const form = $('#med-form');
   const delBtn = $('#med-delete');
 
+  const dayInputs = () => [0, 1, 2, 3, 4, 5, 6].map((i) => form.elements[`d${i}`]);
+
+  // Show the fields that fit: as-needed meds have no meals; day-of-week doses get seven boxes.
+  function syncFormVisibility() {
+    const f = form.elements;
+    const prn = f.kind.value === 'prn';
+    const byDay = !prn && f.doseMode.value === 'byDay';
+    $('#sched-block').hidden = prn;
+    $('#dose-same-label').hidden = byDay;
+    $('#dose-byday').hidden = !byDay;
+    $('#dose-same-text').textContent = prn ? 'Usual dose ' : 'Dose ';
+    if (byDay && dayInputs().every((i) => !i.value.trim())) dayInputs().forEach((i) => { i.value = f.dosage.value.trim(); });
+    $('#byday-summary').textContent = byDay ? Core.doseSummary({ doseByDay: dayInputs().map((i) => i.value.trim()) }) : '';
+  }
+  form.addEventListener('change', syncFormVisibility);
+  form.addEventListener('input', (e) => { if (/^d\d$/.test(e.target.name)) syncFormVisibility(); });
+
   function openMedForm(med) {
     form.reset();
+    const f = form.elements;
+    const today = todayKey();
+    const v = med ? (Core.scheduleOn(med, today) || med.schedule[0]) : null;
     $('#med-dialog-title').textContent = med ? 'Edit medication' : 'Add medication';
-    form.elements.id.value = med ? med.id : '';
-    form.elements.name.value = med ? med.name : '';
-    form.elements.dosage.value = med ? med.dosage : '';
-    form.elements.morning.checked = med ? Boolean(med.morning) : true;
-    form.elements.evening.checked = med ? Boolean(med.evening) : false;
-    form.elements.notes.value = med ? med.notes || '' : '';
-    form.elements.active.checked = med ? Boolean(med.active) : true;
+    f.id.value = med ? med.id : '';
+    f.name.value = med ? med.name : '';
+    f.kind.value = v && v.prn ? 'prn' : 'scheduled';
+    f.morning.checked = v ? v.morning : true;
+    f.evening.checked = v ? v.evening : false;
+    f.doseMode.value = v && v.doseByDay ? 'byDay' : 'same';
+    f.dosage.value = v ? v.dose : '';
+    dayInputs().forEach((input, i) => { input.value = v && v.doseByDay ? v.doseByDay[i] : ''; });
+    f.notes.value = med ? med.notes || '' : '';
+    f.active.checked = med ? Boolean(med.active) : true;
+    f.from.value = today;
+    $('#from-block').hidden = !med;
+    $('#sched-history').innerHTML = med && med.schedule.length > 1
+      ? '<strong>Schedule history</strong>' + med.schedule.map((s) =>
+        `<div>${s.from ? 'From ' + esc(fromDayKey(s.from).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })) : 'From the start'}: ${esc(Core.scheduleSummary(s))}</div>`).join('')
+      : '';
     delBtn.hidden = !med;
+    syncFormVisibility();
     dialog.showModal();
-    setTimeout(() => form.elements.name.focus(), 50);
+    setTimeout(() => f.name.focus(), 50);
   }
 
   $('#med-cancel').onclick = () => dialog.close();
@@ -308,30 +425,90 @@
     const f = form.elements;
     const name = f.name.value.trim();
     if (!name) return;
-    if (!f.morning.checked && !f.evening.checked) {
+    const prn = f.kind.value === 'prn';
+    const byDay = !prn && f.doseMode.value === 'byDay';
+    if (!prn && !f.morning.checked && !f.evening.checked) {
       toast('Pick breakfast, dinner, or both.');
       return;
     }
-    const id = f.id.value;
-    const data = {
-      name, dosage: f.dosage.value.trim(), morning: f.morning.checked, evening: f.evening.checked,
-      notes: f.notes.value.trim(), active: f.active.checked,
+    const days = dayInputs().map((i) => i.value.trim());
+    if (byDay && days.some((d) => !d)) {
+      const missing = days.map((d, i) => (d ? null : Core.WEEKDAY_NAMES[i])).filter(Boolean).join(', ');
+      toast(`Fill in a dose for every day (missing: ${missing}).`);
+      return;
+    }
+    const fields = {
+      prn, morning: !prn && f.morning.checked, evening: !prn && f.evening.checked,
+      dose: byDay ? '' : f.dosage.value.trim(), doseByDay: byDay ? days : null,
     };
-    const m = id && state.meds.find((x) => x.id === id && !x.deleted);
-    if (id && !m) {
+    const basics = { name, notes: f.notes.value.trim(), active: f.active.checked };
+    const today = todayKey();
+    const id = f.id.value;
+    const i = id ? state.meds.findIndex((x) => x.id === id && !x.deleted) : -1;
+    if (id && i < 0) {
       // Deleted on your other device while this form was open.
       dialog.close(); render(); toast('That med was deleted on another device');
       return;
     }
-    if (m) {
-      Object.assign(m, data, { updatedAt: stamp(m.updatedAt) });
+
+    if (i >= 0) {
+      const m = state.meds[i];
+      const from = f.from.value;
+      if (!from) { toast('Pick the day the change starts.'); return; }
+      let next = Core.editSchedule(m, from, fields, today);
+      if (next !== m) {
+        const when = from === today ? 'starting today' : from < today
+          ? `starting ${friendlyDay(fromDayKey(from))}, a past day. Days before today will show this dose if you look back, but doses already logged keep what they recorded`
+          : `starting ${friendlyDay(fromDayKey(from))}`;
+        if (!confirm(`${name}: ${Core.scheduleSummary(Core.scheduleOn(next, from))}, ${when}.\n\nSave this schedule?`)) return;
+      }
+      if (basics.name !== m.name || basics.notes !== (m.notes || '') || basics.active !== Boolean(m.active)) {
+        next = { ...next, ...basics, updatedAt: stamp(next.updatedAt) };
+      }
+      if (next === m) { dialog.close(); toast('No changes'); return; }
+      state.meds[i] = next;
     } else {
-      const now = new Date().toISOString();
       const order = liveMeds().reduce((max, x) => Math.max(max, x.order + 1), 0);
-      state.meds.push({ id: uid(), order, createdAt: now, updatedAt: now, ...data });
+      const med = Core.newMed(uid(), { ...basics, ...fields }, order, today);
+      if (byDay && !confirm(`${name}: ${Core.scheduleSummary(med.schedule[0])}.\n\nSave this schedule?`)) return;
+      state.meds.push(med);
     }
     save(); dialog.close(); render();
     toast(id ? 'Saved' : `${name} added`);
+  });
+
+  // ---------- as-needed log ----------
+  const prnDialog = $('#prn-dialog');
+  const prnForm = $('#prn-form');
+  let prnTarget = null;
+
+  function openPrnForm(med, key) {
+    prnForm.reset();
+    prnTarget = { med, key };
+    const isToday = key === todayKey();
+    const now = new Date();
+    $('#prn-title').textContent = `Log ${med.name}`;
+    $('#prn-day').textContent = `${friendlyDay(fromDayKey(key))}, ${longDate(fromDayKey(key))}`;
+    // Today: default to now. A past day: leave the time blank so it has to be chosen.
+    prnForm.elements.time.value = isToday ? `${pad(now.getHours())}:${pad(now.getMinutes())}` : '';
+    prnForm.elements.dose.value = Core.doseOn(Core.scheduleOn(med, key), key);
+    prnDialog.showModal();
+  }
+  $('#prn-cancel').onclick = () => prnDialog.close();
+
+  prnForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!prnTarget) return;
+    const { med, key } = prnTarget;
+    const t = prnForm.elements.time.value;
+    if (!t) { toast('Pick the time you took it.'); return; }
+    const [h, m] = t.split(':').map(Number);
+    const at = fromDayKey(key); at.setHours(h, m, 0, 0);
+    if (at.getTime() > Date.now() + 60000 && !confirm(`${shortTime(at.toISOString())} is later than now. Log it anyway?`)) return;
+    // A new key per dose, so two in one day (or one per device) never collide.
+    state.logs[Core.prnKey(key, med.id, uid())] = { takenAt: at.toISOString(), updatedAt: new Date().toISOString(), dose: prnForm.elements.dose.value.trim() };
+    save(); prnDialog.close(); render({ keepScroll: true });
+    toast(`${med.name} logged at ${shortTime(at.toISOString())}`);
   });
 
   // Deleting leaves a tombstone so the delete reaches your other device instead of the med coming back.
@@ -361,7 +538,7 @@
     // Don't count days before the app was in use as misses.
     const firstKeys = [
       ...liveMeds().map((m) => m.createdAt ? dayKey(new Date(m.createdAt)) : todayKey()),
-      ...Object.entries(state.logs).filter(([, v]) => v.takenAt).map(([k]) => k.split('|')[0]),
+      ...Object.entries(state.logs).filter(([k, v]) => v.takenAt && !Core.parseKey(k).slot.startsWith('prn:')).map(([k]) => k.split('|')[0]),
     ].filter(Boolean).sort();
     const firstKey = firstKeys[0] || todayKey();
 
@@ -411,7 +588,29 @@
       card.appendChild(row);
     }
     screen.appendChild(card);
-    screen.appendChild(el(`<div class="note">Expected doses are based on your current active meds. Tap a day to view or fix it.</div>`));
+    screen.appendChild(el(`<div class="note">Expected doses follow each med's schedule on that day. Paused meds are left out. As-needed meds never count as missed. Tap a day to view or fix it.</div>`));
+
+    // As-needed doses, newest first, for the same 30 days.
+    const since = dayKey(addDays(now, -(days - 1)));
+    const prn = Core.prnLogs(state).filter((l) => l.day >= since);
+    if (prn.length) {
+      const name = (id) => (state.meds.find((m) => m.id === id) || {}).name || 'Deleted med';
+      const pc = el(`<div class="card"></div>`);
+      const byDay = new Map();
+      for (const l of prn) { if (!byDay.has(l.day)) byDay.set(l.day, []); byDay.get(l.day).push(l); }
+      for (const [day, list] of byDay) {
+        const row = el(`
+          <div class="hist-row prn-hist" role="button" tabindex="0">
+            <div class="d">${esc(friendlyDay(fromDayKey(day)))}<small>${esc(fromDayKey(day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</small></div>
+            <div class="prn-list">${list.slice().reverse().map((l) => `<div>${esc(shortTime(l.takenAt))} · ${esc(name(l.medId))}${l.dose ? ' ' + esc(l.dose) : ''}</div>`).join('')}</div>
+            <div class="score">${list.length}</div>
+          </div>`);
+        row.onclick = () => { viewDay = fromDayKey(day); location.hash = '#today'; };
+        pc.appendChild(row);
+      }
+      screen.appendChild(sectionTitle('As needed, last 30 days'));
+      screen.appendChild(pc);
+    }
   }
 
   // ---------- Settings ----------
@@ -488,6 +687,9 @@
     bk.querySelector('input[type=file]').onchange = importJSON;
     screen.appendChild(sectionTitle('Backup'));
     screen.appendChild(bk);
+
+    screen.appendChild(sectionTitle('App'));
+    screen.appendChild(updatesCard());
 
     const installed = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
     screen.appendChild(el(`
@@ -832,6 +1034,66 @@
     return card;
   }
 
+  // ---------- updates ----------
+  // An installed copy must never keep running old dosing code after a fix ships. On open and
+  // whenever the app comes back on screen, ask the server (bypassing every cache) which
+  // version is current. If it's newer than this one, show a banner that updates in one tap.
+  let latestVersion = null;
+
+  async function checkForUpdate() {
+    try {
+      const res = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return null;
+      latestVersion = String((await res.json()).version || '');
+    } catch (e) { return null; } // offline: keep going with what's installed
+    updateBanner();
+    return latestVersion;
+  }
+
+  function updateBanner() {
+    let b = $('#update-banner');
+    const stale = latestVersion && latestVersion !== APP_VERSION;
+    if (!stale) { if (b) b.remove(); return; }
+    if (!b) {
+      b = el(`<div id="update-banner" class="update-banner" role="alert">
+        <span>A new version of Meds (v<span class="v"></span>) is ready. You're on v${APP_VERSION}.</span>
+        <button class="btn primary">Update now</button></div>`);
+      b.querySelector('button').onclick = forceUpdate;
+      document.body.prepend(b);
+    }
+    b.querySelector('.v').textContent = latestVersion;
+  }
+
+  // Clear the cached app files (never your data) and reload from the network.
+  async function forceUpdate() {
+    toast('Updating');
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      if (reg) await reg.update().catch(() => {});
+      if ('caches' in window) {
+        for (const k of await caches.keys()) if (k !== DATA_CACHE) await caches.delete(k);
+      }
+    } catch (e) { /* reload anyway */ }
+    location.reload();
+  }
+
+  function updatesCard() {
+    const card = el(`
+      <div class="card">
+        <div class="settings-row"><div class="l">Meds v${APP_VERSION} <small class="upd-status">Checks for a new version each time you open the app.</small></div>
+          <button class="btn">Check for updates</button></div>
+      </div>`);
+    const status = card.querySelector('.upd-status');
+    card.querySelector('button').onclick = async () => {
+      status.textContent = 'Checking';
+      const v = await checkForUpdate();
+      if (v === null) status.textContent = "Couldn't reach the server. Try again when online.";
+      else if (v === APP_VERSION) status.textContent = `You're on the latest version.`;
+      else { status.textContent = `v${v} is available. Updating`; forceUpdate(); }
+    };
+    return card;
+  }
+
   // ---------- calendar export ----------
   function downloadICS() {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
@@ -841,8 +1103,12 @@
     const dt = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
     const escText = (s) => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => '\\' + c);
 
-    const events = SLOTS.filter((s) => medsFor(s).length > 0).map((s) => {
-      const list = medsFor(s).map((m) => m.name + (m.dosage ? ` (${m.dosage})` : '')).join(', ');
+    // A repeating calendar event can't change by weekday, so day-of-week meds list their full pattern.
+    const events = SLOTS.filter((s) => medsFor(s, todayKey()).length > 0).map((s) => {
+      const list = medsFor(s, todayKey()).map(({ med, version }) => {
+        const d = Core.doseSummary(version);
+        return med.name + (d ? ` (${d})` : '');
+      }).join(', ');
       return [
         'BEGIN:VEVENT',
         `UID:meds-${s.id}-daily@srichards`,
@@ -928,6 +1194,7 @@
       if (pinnedToToday && !sameDay(viewDay, new Date())) viewDay = new Date();
       render({ keepScroll: true });
       syncNow();
+      checkForUpdate();
     }
   });
   window.addEventListener('online', () => syncNow());
@@ -935,7 +1202,18 @@
   setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 2 * 60 * 1000);
 
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+    // updateViaCache 'none': the browser always asks the server for sw.js (and what it imports)
+    // instead of trusting its HTTP cache, so a new version is noticed on the next open.
+    window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => {}));
+    // When a new service worker takes over an open page, reload once so the page runs the
+    // new code too. (Not on first install, when there was no worker before.)
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloading) return;
+      reloading = true;
+      location.reload();
+    });
     // Tapping a push notification while the app is already open: jump to today.
     navigator.serviceWorker.addEventListener('message', (e) => {
       if (e.data && e.data.type === 'open-today') {
@@ -946,5 +1224,7 @@
   }
 
   render();
+  mirrorForServiceWorker();
   syncNow();
+  checkForUpdate();
 })();

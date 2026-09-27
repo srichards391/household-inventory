@@ -3,7 +3,9 @@
 A small, installable web app for one job: knowing what to take with breakfast and dinner, and whether you already did.
 
 - **Today**: two cards, Morning and Evening. Tap a med to mark it taken (it stamps the time). Tap again to undo. "Take all" logs the whole slot. Use ‹ to fix a day you forgot to log.
-- **Meds**: add, edit, reorder, pause, delete. Once a day or twice a day, tied to meals.
+- **Meds**: add, edit, reorder, pause, delete. Scheduled with breakfast, dinner, or both, with one dose or a different dose each weekday. Or as needed (PRN).
+- **Doses by day and over time**: a med like warfarin can be 8 mg on Thursday and Sunday and 6 mg the rest of the week. Changing a dose starts on a day you pick; earlier days keep what applied then, and every logged dose keeps the dose it was logged at.
+- **As needed**: log a PRN med whenever you take it, as often as needed, at the time you took it. It's never "due" and never counts as missed.
 - **History**: last 30 days, adherence percent, day streak. Tap a day to open it.
 - **Settings**: breakfast and dinner times, sync between iPhone and Mac, push reminders, calendar reminders, JSON backup and restore.
 
@@ -15,11 +17,12 @@ No accounts to create, no server to run, no build step. Plain HTML, CSS and Java
 | --- | --- |
 | `index.html` | The page shell: header, tab bar, the add/edit dialog. |
 | `app.js` | Everything you see and tap, plus the sync and push-subscribe code. |
-| `sync-core.js` | The data format, the merge rule, and encryption. No page code, so Node can test it. |
+| `sync-core.js` | The data format, which dose applies on which day, the merge rule, and encryption. No page code, so Node can test it. |
 | `config.js` | The public push key. Shared by the app and the reminder sender. |
-| `sw.js` | Service worker: offline cache, and shows push notifications. |
+| `sw.js` | Service worker: offline cache, and shows push notifications with today's doses. |
+| `version.json` | The current release number. The app checks it on every open to catch updates. |
 | `scripts/send-push.mjs` | Sends the reminders. Run by GitHub Actions, not by you. |
-| `tests/` | Node tests for the merge, encryption, and reminder timing. |
+| `tests/` | Node tests for doses by day, schedule history, PRN, the merge, encryption, and reminder timing. `tests/fixtures/` holds the v1.1 sync code, to test old and new devices together. |
 
 ## Where it runs
 
@@ -50,8 +53,10 @@ Each device keeps a full copy. Sync keeps them the same through a private GitHub
 
 **How conflicts are settled.** Every med, every dose, and the settings carry a "last changed" time. When the two copies differ, the newer change wins, record by record. Nothing only one side has is ever dropped. Un-taking a dose is saved as "not taken at 8:05", not deleted, so the undo reaches the other device. A dose is stored once per day, slot, and med, so tapping it on both devices still counts as one dose.
 
+Dose and schedule changes merge one version at a time: change warfarin's dose on the Mac and its notes on the phone, and both survive.
+
 **Limits worth knowing:**
-- If you edit the *same med* on both devices before either syncs (say, change the dose on the Mac and pause it on the phone), the later edit wins as a whole and the other edit is lost. Re-check a med after editing it on two devices.
+- If you change the *same* schedule start day on both devices before either syncs, the later one wins. Name, notes, and paused/active also go to the later edit as a group. Re-check a med after editing it on two devices.
 - "Newer" uses each device's clock. iPhones and Macs set their clocks automatically, so this is fine unless one clock is set by hand.
 - Deleted meds and un-taken doses are forgotten after 90 days. A device that has been offline longer than that could bring an old one back when it reconnects.
 
@@ -65,7 +70,7 @@ GitHub Actions sends a push notification at breakfast and dinner. Tapping it ope
 
 - Times live in `.github/workflows/push-reminders.yml` (`MORNING_TIME`, `EVENING_TIME`, New York time), **not** in the app. The app's Settings times are for "due" status and the calendar file. Keep them matching. The workflow file explains how to change the cron lines.
 - The app never sends anything itself. It subscribes, and you paste the subscription into the repo secret `PUSH_SUBSCRIPTION` (one object, or a JSON list `[ ... , ... ]` for iPhone and Mac). The private key is the repo secret `VAPID_PRIVATE_KEY`.
-- The notification can't list your meds (GitHub can't see what's on your phone), so it just says "Morning meds. With breakfast. Tap to log."
+- GitHub can't see your meds, so it sends a plain "Morning meds" signal. When it arrives, your device fills in the meds and doses still to take for that slot today (e.g. "With dinner: Warfarin 8 mg. Tap to log."), from its own copy of your data. As-needed meds are never included. If it can't read that copy it falls back to "With breakfast. Tap to log." Note this puts med names on the lock screen; to hide them, iPhone Settings → Notifications → Meds → Show Previews → When Unlocked.
 - If a device's subscription expires, the workflow run fails with "Subscription expired…" and GitHub emails you. Re-enable push in Settings and update the secret.
 - **GitHub pauses scheduled workflows after 60 days with no commits to the repo.** If reminders stop, open the Actions tab, pick "Push reminders", and click "Enable workflow".
 - GitHub sometimes runs scheduled jobs late (the script still sends up to 45 minutes after the target) and, rarely, skips one. **Keep the calendar reminders below as a backup.** Don't make push your only reminder.
@@ -78,9 +83,17 @@ GitHub Actions sends a push notification at breakfast and dinner. Tapping it ope
 
 You get two daily events with alerts at your breakfast and dinner times. Each one links back to the app. If you change the times later, delete the two events and get a fresh file.
 
+## Updating an installed copy
+
+Installed copies update themselves: on every open, Meds asks the server which version is current. If there's a newer one it shows an orange **Update now** banner at the top. Tap it. You can also check any time in Settings → App → **Check for updates**. The version you're running is shown there and at the bottom of Settings.
+
+If Meds ever says "Meds didn't finish updating", close it completely and open it again. It shows no doses in that state on purpose, so a mix of old and new code can never show a wrong one.
+
+**Releasing a new version** (for whoever changes the code): bump `APP_VERSION` in `app.js`, `VERSION` in `sync-core.js`, `CACHE_VERSION` and every `?v=` in `sw.js`, every `?v=` in `index.html`, and `version.json`. `node --test` fails if any of them disagree.
+
 ## Backup
 
-Settings → Backup → **Export** downloads everything as JSON. **Import** accepts v1.0 and v1.1 files. With sync on, Import merges the file in (newer wins, nothing deleted) instead of replacing.
+Settings → Backup → **Export** downloads everything as JSON. **Import** accepts files from any version. With sync on, Import merges the file in (newer wins, nothing deleted) instead of replacing.
 
 ## Local development
 
@@ -90,7 +103,7 @@ Any static server works:
 python3 -m http.server 8080
 ```
 
-then open `http://localhost:8080/`. When you change files, bump `CACHE_VERSION` in `sw.js` so installed copies refresh.
+then open `http://localhost:8080/`. When you change files, do the version bump described under "Releasing a new version" so installed copies refresh.
 
 Run the tests (Node 22 or later, nothing to install):
 
