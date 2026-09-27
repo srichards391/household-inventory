@@ -11,3 +11,4 @@ build/
 *.dSYM
 .DS_Store
 node_modules/
+tests/private/

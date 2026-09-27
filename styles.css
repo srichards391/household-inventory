@@ -210,11 +210,16 @@ dialog h2 { font-size: 20px; margin-bottom: 14px; }
   border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font-size: 16px;
 }
 .form label small { display: block; font-weight: 500; margin-top: 4px; }
-.byday { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin-bottom: 4px; }
-.byday label { margin-bottom: 8px; }
-.byday input { margin-top: 3px !important; }
-.byday-summary { grid-column: 1 / -1; font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
-.byday-summary:empty { display: none; }
+/* Dose grid (v2.1): one box, or split by meal and/or weekday */
+.dose-grid label { margin-bottom: 8px; }
+.dg { display: grid; gap: 6px 8px; align-items: center; margin-bottom: 8px; }
+.dg-h { font-size: 13px; color: var(--muted); font-weight: 700; }
+.dg-r { font-size: 14px; font-weight: 600; padding-right: 4px; }
+.form .dg input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 16px; min-width: 0; }
+.dose-options { margin: 4px 0 6px; }
+.dose-options .check { font-size: 15px; }
+.dose-summary { font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
+.dose-summary:empty { display: none; }
 .sched-history { font-size: 13px; color: var(--muted); line-height: 1.5; margin: 4px 0 8px; }
 .sched-history strong { color: var(--text); }
 .dialog-sub { margin: -8px 0 14px; color: var(--muted); font-size: 14px; }

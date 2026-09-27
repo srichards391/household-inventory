@@ -4,22 +4,17 @@
  * encryption. Kept in its own file so the exact same code runs in the app, in the service
  * worker (for the push reminder text), and in the Node tests (tests/*.test.*).
  *
- * Data format (stored under localStorage "meds.v2"; schedules since v2.0, per-slot doses since v2.1):
+ * Data format (stored under localStorage "meds.v2"; shape version 3 since Meds v2.0):
  *
  *   meds: [{ id, name, notes, active, order, createdAt, updatedAt, schedule: [version, ...],
  *            dosage, morning, evening, _mirror }]
  *     schedule: the med's dosing over time, oldest first. Each version applies from its
  *       `from` day ("YYYY-MM-DD", or "" for "from the beginning") until the next version.
- *       version = { from, prn, doses: { morning, evening }, dose, updatedAt,
- *                   + morning, evening, doseByDay (a copy for devices on v2.0) }
- *         doses: per slot, null (not taken then), one dose ("25 mg"), or 7 doses Sunday first.
- *           split by meal    { morning: "10 mg", evening: "20 mg" }
- *           split by weekday { morning: null, evening: ["2 mg","1 mg","1 mg","1 mg","2 mg","1 mg","1 mg"] }
- *           breakfast only   { morning: "5 mg", evening: null }
- *         prn:  true for as-needed meds, with their usual `dose`. Never due, never missed,
- *               never in a reminder.
- *         morning, evening, dose, doseByDay: what v2.0 reads. Derived from `doses`; a version
- *           with no `doses` (written by v2.0) gets them derived the other way.
+ *       version = { from, prn, morning, evening, dose, doseByDay, updatedAt }
+ *         prn:       true for as-needed meds. They are never due, never missed, never in a reminder.
+ *         dose:      the dose as typed, e.g. "25 mg". Used when doseByDay is null.
+ *         doseByDay: null, or 7 doses indexed Sunday=0 ... Saturday=6, e.g. warfarin
+ *                    ["8 mg","6 mg","6 mg","6 mg","8 mg","6 mg","6 mg"].
  *       Editing a dose or schedule adds a version starting on a chosen day (default today),
  *       so earlier days keep showing the dose that applied then.
  *     dosage, morning, evening: a copy of the current version in the v1.x shape, so a device
@@ -51,7 +46,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const VERSION = '2.1'; // must match APP_VERSION in app.js (checked at startup and by tests)
+  const VERSION = '2.0'; // must match APP_VERSION in app.js (checked at startup and by tests)
   const EPOCH = '1970-01-01T00:00:00.000Z';
   const TOMBSTONE_DAYS = 90;
   const PBKDF2_ITERATIONS = 200000;
@@ -94,83 +89,24 @@
   }
 
   // ---------- schedules and doses ----------
-  // A dose "spec" for one slot is either one dose for every day ("25 mg") or seven doses,
-  // Sunday first (["8 mg", "6 mg", ...]). A version's `doses` has one spec per slot, or null
-  // when the med isn't taken in that slot. So a dose resolves on two axes, slot and weekday:
-  //   { morning: '10 mg', evening: '20 mg' }          different by slot
-  //   { morning: null, evening: ['2 mg', '1 mg', …] }  different by weekday
-  //   { morning: '5 mg', evening: '5 mg' }            neither
   const cleanDose = (s) => String(s == null ? '' : s).trim();
-  const SLOT_NAMES = { morning: 'breakfast', evening: 'dinner' };
-  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  function cleanSpec(spec) {
-    if (spec == null) return null;
-    if (Array.isArray(spec)) return spec.length === 7 ? spec.map(cleanDose) : null;
-    if (typeof spec === 'string' || typeof spec === 'number') return cleanDose(spec);
-    return null;
-  }
-  const specsEqual = (a, b) => stableStringify(a) === stableStringify(b);
-
-  // Doses in the v2.0 shape ({ morning, evening, dose, doseByDay }), for versions written by
-  // v2.0 or earlier (which have no `doses`), and for input from older callers.
-  function dosesFromLegacy(v) {
-    if (v.prn) return { morning: null, evening: null };
-    const byDay = Array.isArray(v.doseByDay) && v.doseByDay.length === 7 ? v.doseByDay.map(cleanDose) : null;
-    const spec = byDay || cleanDose(v.dose);
-    return { morning: v.morning ? spec : null, evening: v.evening ? spec : null };
-  }
-
-  // "8 mg Sun, Thu · 6 mg Mon, Tue, Wed, Fri, Sat" for a weekday spec, the dose itself otherwise.
-  function specText(spec, sep = ' · ') {
-    if (spec == null) return '';
-    if (!Array.isArray(spec)) return spec;
-    const groups = new Map();
-    spec.forEach((d, i) => { if (!groups.has(d)) groups.set(d, []); groups.get(d).push(WEEKDAYS[i]); });
-    if (groups.size === 1) return spec[0];
-    return [...groups].map(([d, days]) => `${d || '(blank)'} ${days.join(', ')}`).join(sep);
-  }
-
-  // The fields a device on v2.0 reads, written exactly as v2.0 itself would store them, so its
-  // stripped copy of a version is always a subset of ours and loses every merge tie.
-  // v2.0 can hold one dose per version: when the slots differ it gets the full description
-  // ("200 mg breakfast · 600 mg dinner") as the dose, which is right, just wordy.
-  function legacyVersionFields(prn, doses, dose) {
-    if (prn) return { morning: false, evening: false, dose, doseByDay: null };
-    const present = SLOT_IDS.filter((s) => doses[s] != null).map((s) => doses[s]);
-    const same = present.every((spec) => specsEqual(spec, present[0]));
-    const out = { morning: doses.morning != null, evening: doses.evening != null, dose: '', doseByDay: null };
-    if (present.length && same && Array.isArray(present[0])) out.doseByDay = present[0];
-    else if (present.length && same) out.dose = present[0];
-    else out.dose = dosesText({ prn, doses, dose });
-    return out;
-  }
-
-  // Accepts the current shape ({ prn, doses, dose }), the v2.0 shape, or form input in either.
   function normalizeVersion(v, fallbackUpdatedAt) {
     const prn = Boolean(v.prn);
-    const hasDoses = !prn && v.doses && typeof v.doses === 'object';
-    let doses = hasDoses ? { morning: cleanSpec(v.doses.morning), evening: cleanSpec(v.doses.evening) } : dosesFromLegacy(v);
-    // As-needed meds have one usual dose and no slots.
-    const dose = prn ? cleanDose(v.dose) : '';
-    if (prn) doses = { morning: null, evening: null };
+    const byDay = Array.isArray(v.doseByDay) && v.doseByDay.length === 7 ? v.doseByDay.map(cleanDose) : null;
     return {
       from: typeof v.from === 'string' ? v.from : '',
       prn,
-      doses,
-      ...legacyVersionFields(prn, doses, dose),
+      morning: !prn && Boolean(v.morning),
+      evening: !prn && Boolean(v.evening),
+      dose: cleanDose(v.dose),
+      doseByDay: prn ? null : byDay,
       updatedAt: v.updatedAt || fallbackUpdatedAt || EPOCH,
-      // Doses worked out from the v2.0 fields rather than stored. A device on v2.0 drops
-      // `doses` from versions it syncs; without this mark, its copy of a split-dose med (10 mg
-      // breakfast, 20 mg dinner) would come back as one dose text for both slots and could
-      // win a same-time tie. With it, the real copy always wins the tie (see newer()).
-      // Once marked, it stays marked (until an edit writes a fresh version).
-      ...(!prn && (!hasDoses || v.derived === true) ? { derived: true } : {}),
     };
   }
 
   // The parts of a version that decide what you take. Two versions with the same text here are the same schedule.
-  const scheduleText = (v) => stableStringify({ prn: v.prn, doses: v.doses, dose: v.prn ? v.dose : '' });
+  const scheduleText = (v) => stableStringify({ prn: v.prn, morning: v.morning, evening: v.evening, dose: v.dose, doseByDay: v.doseByDay });
 
   // Which version applies on a day (the last one starting on or before it).
   function scheduleOn(med, dayKey) {
@@ -179,55 +115,35 @@
     return found;
   }
 
-  // The dose to take in a slot on a day. As-needed meds: their usual dose.
-  // Without a slot it only answers when every slot agrees, and throws otherwise, so no
-  // caller can quietly show the breakfast dose at dinner.
-  function doseOn(version, dayKey, slotId) {
+  // The dose a version says to take on a day.
+  function doseOn(version, dayKey) {
     if (!version) return '';
-    if (version.prn) return version.dose || '';
-    const pick = (spec) => (spec == null ? '' : Array.isArray(spec) ? spec[weekdayOf(dayKey)] || '' : spec);
-    if (slotId) return pick(version.doses[slotId]);
-    const all = SLOT_IDS.filter((s) => version.doses[s] != null).map((s) => pick(version.doses[s]));
-    if (all.every((d) => d === all[0])) return all[0] || '';
-    throw new Error('doseOn: this med has different doses by slot; pass the slot');
+    if (version.doseByDay) return version.doseByDay[weekdayOf(dayKey)] || '';
+    return version.dose || '';
   }
 
-  // Does this slot's dose vary by weekday? Differ from the other slot?
-  const variesByDay = (version, slotId) => Array.isArray(version.doses[slotId]);
-  function variesBySlot(version) {
-    return version.doses.morning != null && version.doses.evening != null && !specsEqual(version.doses.morning, version.doses.evening);
-  }
-
-  // The whole dose pattern in words.
-  //   "25 mg"   "8 mg Sun, Thu · 6 mg Mon, Tue, Wed, Fri, Sat"   "200 mg breakfast · 600 mg dinner"
-  function dosesText(version) {
+  // "8 mg Sun, Thu · 6 mg Mon, Tue, Wed, Fri, Sat"
+  function doseSummary(version) {
     if (!version) return '';
-    if (version.prn) return version.dose || '';
-    const slots = SLOT_IDS.filter((s) => version.doses[s] != null);
-    if (!slots.length) return '';
-    if (!variesBySlot(version)) return specText(version.doses[slots[0]]);
-    return slots.map((s) => Array.isArray(version.doses[s])
-      ? `${SLOT_NAMES[s]}: ${specText(version.doses[s], ', ')}`
-      : `${version.doses[s]} ${SLOT_NAMES[s]}`).join(' · ');
+    if (!version.doseByDay) return version.dose || '';
+    const groups = new Map();
+    version.doseByDay.forEach((d, i) => { if (!groups.has(d)) groups.set(d, []); groups.get(d).push(WEEKDAYS[i]); });
+    if (groups.size === 1) return version.doseByDay[0];
+    return [...groups].map(([d, days]) => `${d || '(blank)'} ${days.join(', ')}`).join(' · ');
   }
-  const doseSummary = dosesText;
-
-  // One slot's pattern in words, e.g. for the dinner calendar event: "8 mg Sun, Thu · 6 mg …".
-  const slotDoseText = (version, slotId) => specText(version && version.doses[slotId]);
 
   // One line describing a version, for the Meds list and the schedule history.
   function scheduleSummary(version) {
     if (!version) return '';
-    const dose = dosesText(version);
+    const dose = doseSummary(version);
     if (version.prn) return `As needed${dose ? ' · ' + dose : ''}`;
-    const when = SLOT_IDS.filter((s) => version.doses[s] != null).map((s) => cap(SLOT_NAMES[s])).join(' + ') || 'No schedule';
-    if (variesBySlot(version)) return dose;
+    const when = [version.morning ? 'Breakfast' : null, version.evening ? 'Dinner' : null].filter(Boolean).join(' + ') || 'No schedule';
     return dose ? `${dose} · ${when}` : when;
   }
 
   // The v1.x-shaped copy kept on each med for devices still running v1.1.
   function legacyFields(version) {
-    return { dosage: dosesText(version), morning: Boolean(version && version.doses.morning != null), evening: Boolean(version && version.doses.evening != null) };
+    return { dosage: doseSummary(version), morning: Boolean(version && version.morning), evening: Boolean(version && version.evening) };
   }
   const legacyText = (m) => stableStringify({ dosage: cleanDose(m.dosage), morning: Boolean(m.morning), evening: Boolean(m.evening) });
 
@@ -340,7 +256,6 @@
     if (!b) return a;
     const ta = time(a.updatedAt), tb = time(b.updatedAt);
     if (ta !== tb) return ta > tb ? a : b;
-    if (Boolean(a.derived) !== Boolean(b.derived)) return a.derived ? b : a; // stored beats worked-out
     const ab = covers(a, b), ba = covers(b, a);
     if (ab !== ba) return ab ? a : b; // same time, one just has more detail: keep the detail
     return stableStringify(a) >= stableStringify(b) ? a : b;
@@ -406,15 +321,14 @@
   const logKey = (dayKey, slotId, medId) => `${dayKey}|${slotId}|${medId}`;
   const prnKey = (dayKey, medId, uniqueId) => `${dayKey}|prn:${uniqueId}|${medId}`;
 
-  // Scheduled meds for a slot on a day, with the dose for that slot on that day.
-  // As-needed meds never appear.
+  // Scheduled meds for a slot on a day, with the dose for that day. As-needed meds never appear.
   function slotMeds(state, slotId, dayKey) {
     const out = [];
     for (const med of liveMeds(state)) {
       if (!med.active) continue;
       const version = scheduleOn(med, dayKey);
-      if (!version || version.prn || version.doses[slotId] == null) continue;
-      out.push({ med, version, dose: doseOn(version, dayKey, slotId) });
+      if (!version || version.prn || !version[slotId]) continue;
+      out.push({ med, version, dose: doseOn(version, dayKey) });
     }
     return out;
   }
@@ -441,7 +355,7 @@
   function loggedDose(state, dayKey, slotId, med) {
     const log = state.logs[logKey(dayKey, slotId, med.id)];
     if (log && log.takenAt && typeof log.dose === 'string') return log.dose;
-    return doseOn(scheduleOn(med, dayKey), dayKey, slotId);
+    return doseOn(scheduleOn(med, dayKey), dayKey);
   }
 
   // Push notification body, built on the device from its own data when the reminder arrives.
@@ -510,8 +424,7 @@
   return {
     VERSION, EPOCH, TOMBSTONE_DAYS, SLOT_IDS, WEEKDAYS, WEEKDAY_NAMES,
     emptyState, nextStamp, stableStringify, dayKeyOf, weekdayOf,
-    SLOT_NAMES, scheduleOn, doseOn, doseSummary, dosesText, slotDoseText, variesByDay, variesBySlot,
-    scheduleSummary, scheduleText, editSchedule, newMed, withLegacyFields,
+    scheduleOn, doseOn, doseSummary, scheduleSummary, scheduleText, editSchedule, newMed, withLegacyFields,
     migrate, merge, purge, canonical, reconcile,
     logKey, prnKey, parseKey, slotMeds, prnMeds, prnLogs, loggedDose, reminderBody,
     encrypt, decrypt, DecryptError,

@@ -13,7 +13,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="./styles.css?v=2.0">
+  <link rel="stylesheet" href="./styles.css?v=2.1">
 </head>
 <body>
   <header class="topbar">
@@ -49,25 +49,14 @@
           <label class="check"><input type="checkbox" name="morning"> Morning, with breakfast</label>
           <label class="check"><input type="checkbox" name="evening"> Evening, with dinner</label>
         </fieldset>
-        <fieldset>
-          <legend>Dose</legend>
-          <label class="check"><input type="radio" name="doseMode" value="same"> Same every day</label>
-          <label class="check"><input type="radio" name="doseMode" value="byDay"> Different by day of the week</label>
-        </fieldset>
       </div>
-      <label id="dose-same-label"><span id="dose-same-text">Dose </span>
-        <input name="dosage" type="text" autocomplete="off" placeholder="e.g. 10 mg, 1 tablet">
-      </label>
-      <div id="dose-byday" class="byday" hidden>
-        <label>Sunday<input name="d0" type="text" autocomplete="off"></label>
-        <label>Monday<input name="d1" type="text" autocomplete="off"></label>
-        <label>Tuesday<input name="d2" type="text" autocomplete="off"></label>
-        <label>Wednesday<input name="d3" type="text" autocomplete="off"></label>
-        <label>Thursday<input name="d4" type="text" autocomplete="off"></label>
-        <label>Friday<input name="d5" type="text" autocomplete="off"></label>
-        <label>Saturday<input name="d6" type="text" autocomplete="off"></label>
-        <div class="byday-summary" id="byday-summary" aria-live="polite"></div>
+      <!-- One dose box in the usual case. The options below split it by meal, by weekday, or both. -->
+      <div id="dose-grid" class="dose-grid"></div>
+      <div id="dose-options" class="dose-options">
+        <label class="check" id="opt-slot"><input type="checkbox" name="bySlot"> Different dose at breakfast and dinner</label>
+        <label class="check"><input type="checkbox" name="byDay"> Different dose on different days of the week</label>
       </div>
+      <div class="dose-summary" id="dose-summary" aria-live="polite"></div>
       <label id="from-block">Dose or schedule changes start on
         <input name="from" type="date">
         <small>Earlier days keep the schedule they had. Doses already logged never change.</small>
@@ -109,8 +98,8 @@
 
   <!-- ?v= makes each release a new address, so no cache can hand back an older copy.
        Bump with APP_VERSION in app.js (tests/dosing.test.js checks they match). -->
-  <script src="./config.js?v=2.0"></script>
-  <script src="./sync-core.js?v=2.0"></script>
-  <script src="./app.js?v=2.0"></script>
+  <script src="./config.js?v=2.1"></script>
+  <script src="./sync-core.js?v=2.1"></script>
+  <script src="./app.js?v=2.1"></script>
 </body>
 </html>

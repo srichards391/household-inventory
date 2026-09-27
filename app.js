@@ -1,4 +1,4 @@
-/* Meds v2.0
+/* Meds v2.1
  * A single-file, no-build web app. Data lives in localStorage on this device and, if sync is
  * turned on, in an encrypted private GitHub Gist shared by your devices.
  * Sections: storage, date helpers, rendering per tab, medication form, as-needed log,
@@ -11,7 +11,7 @@
 
   // When releasing: bump this, VERSION in sync-core.js, CACHE_VERSION in sw.js, version.json,
   // and every ?v= in index.html and sw.js. tests/dosing.test.js fails if any disagree.
-  const APP_VERSION = '2.0';
+  const APP_VERSION = '2.1';
   const STORE_KEY = 'meds.v2';
   const OLD_STORE_KEY = 'meds.v1'; // left in place after migrating, as a just-in-case copy
   const SYNC_KEY = 'meds.sync';    // token, passphrase, gist id. This device only: never synced or exported.
@@ -235,11 +235,15 @@
         const shownTakenAt = takenAt(key, slot.id, m.id);
         // Taken: show the dose saved with the log. Not taken: the dose scheduled for this date.
         const shownDose = shownTakenAt ? Core.loggedDose(state, key, slot.id, m) : dose;
-        const byDay = Boolean(version.doseByDay);
+        // Say which way this dose is special, so a different number than yesterday or than the
+        // other meal reads as intended: "Thursday dose", "Breakfast dose", "Thursday dinner dose".
+        const byDay = Core.variesByDay(version, slot.id);
+        const bySlot = Core.variesBySlot(version);
+        const tag = [byDay ? weekday : '', bySlot ? (byDay ? Core.SLOT_NAMES[slot.id] : slot.id === 'morning' ? 'Breakfast' : 'Dinner') : ''].filter(Boolean).join(' ');
         const changed = shownTakenAt && shownDose !== dose;
         const meta = [
           shownDose ? `<span class="dose">${esc(shownDose)}</span>` : '',
-          byDay ? `<span class="pill">${esc(weekday)} dose</span>` : '',
+          tag ? `<span class="pill">${esc(tag)} dose</span>` : '',
           changed ? `<span class="dose-note">schedule for this day now says ${esc(dose || 'no dose')}</span>` : '',
         ].filter(Boolean).join(' ');
         const row = el(`
@@ -373,22 +377,94 @@
   const form = $('#med-form');
   const delBtn = $('#med-delete');
 
-  const dayInputs = () => [0, 1, 2, 3, 4, 5, 6].map((i) => form.elements[`d${i}`]);
+  // The dose boxes. Usually one box. "Different dose at breakfast and dinner" splits it into a
+  // column per meal; "Different dose on different days" into a row per weekday; both gives a
+  // 7 x 2 grid. What you typed is kept when you switch, and fills the new boxes.
+  let cells = {}; // "col|row" -> text. col: 'all', 'morning' or 'evening'. row: 'any' or 0..6.
+  const cellKey = (col, row) => `${col}|${row}`;
 
-  // Show the fields that fit: as-needed meds have no meals; day-of-week doses get seven boxes.
-  function syncFormVisibility() {
+  function doseShape() {
     const f = form.elements;
     const prn = f.kind.value === 'prn';
-    const byDay = !prn && f.doseMode.value === 'byDay';
-    $('#sched-block').hidden = prn;
-    $('#dose-same-label').hidden = byDay;
-    $('#dose-byday').hidden = !byDay;
-    $('#dose-same-text').textContent = prn ? 'Usual dose ' : 'Dose ';
-    if (byDay && dayInputs().every((i) => !i.value.trim())) dayInputs().forEach((i) => { i.value = f.dosage.value.trim(); });
-    $('#byday-summary').textContent = byDay ? Core.doseSummary({ doseByDay: dayInputs().map((i) => i.value.trim()) }) : '';
+    const slots = prn ? [] : SLOTS.filter((s) => f[s.id].checked).map((s) => s.id);
+    const bySlot = slots.length === 2 && f.bySlot.checked;
+    const byDay = slots.length > 0 && f.byDay.checked;
+    return { prn, slots, bySlot, byDay, cols: bySlot ? slots : ['all'], rows: byDay ? [0, 1, 2, 3, 4, 5, 6] : ['any'] };
   }
-  form.addEventListener('change', syncFormVisibility);
-  form.addEventListener('input', (e) => { if (/^d\d$/.test(e.target.name)) syncFormVisibility(); });
+
+  // A box's value, or the closest thing already typed (the same meal's single dose, then the
+  // same day's shared dose, then the one shared dose).
+  function cellValue(col, row) {
+    for (const k of [cellKey(col, row), cellKey(col, 'any'), cellKey('all', row), cellKey('all', 'any')]) {
+      if (cells[k] != null && cells[k] !== '') return cells[k];
+    }
+    return '';
+  }
+
+  const SLOT_LABEL = { morning: 'Breakfast', evening: 'Dinner' };
+  function renderDoseGrid() {
+    const shape = doseShape();
+    const grid = $('#dose-grid');
+    grid.innerHTML = '';
+    for (const col of shape.cols) for (const row of shape.rows) cells[cellKey(col, row)] = cellValue(col, row);
+    if (shape.cols.length === 1 && shape.rows.length === 1) {
+      grid.appendChild(el(`<label>${shape.prn ? 'Usual dose' : 'Dose'}
+        <input type="text" autocomplete="off" placeholder="e.g. 10 mg, 1 tablet" data-col="${shape.cols[0]}" data-row="any" value="${esc(cells[cellKey(shape.cols[0], 'any')])}"></label>`));
+    } else {
+      const head = shape.cols.map((c) => `<div class="dg-h">${c === 'all' ? 'Dose' : SLOT_LABEL[c]}</div>`).join('');
+      const table = el(`<div class="dg" style="grid-template-columns: auto repeat(${shape.cols.length}, 1fr)"><div></div>${head}</div>`);
+      for (const row of shape.rows) {
+        table.appendChild(el(`<div class="dg-r">${row === 'any' ? 'Every day' : Core.WEEKDAY_NAMES[row]}</div>`));
+        for (const col of shape.cols) {
+          const label = `${row === 'any' ? '' : Core.WEEKDAY_NAMES[row] + ' '}${col === 'all' ? 'dose' : SLOT_LABEL[col].toLowerCase() + ' dose'}`;
+          table.appendChild(el(`<input type="text" autocomplete="off" aria-label="${esc(label)}" data-col="${col}" data-row="${row}" value="${esc(cells[cellKey(col, row)])}">`));
+        }
+      }
+      grid.appendChild(table);
+    }
+    updateDoseSummary();
+  }
+
+  // What the boxes add up to, in the saved shape. `missing` lists empty boxes when the dose is split.
+  function readDoses() {
+    const shape = doseShape();
+    const missing = [];
+    const val = (col, row) => {
+      const v = (cells[cellKey(col, row)] || '').trim();
+      if (!v && (shape.bySlot || shape.byDay)) {
+        missing.push(`${row === 'any' ? '' : Core.WEEKDAY_NAMES[row] + ' '}${col === 'all' ? '' : SLOT_LABEL[col].toLowerCase()}`.trim() || 'dose');
+      }
+      return v;
+    };
+    if (shape.prn) return { shape, missing, fields: { prn: true, dose: val('all', 'any') } };
+    const doses = { morning: null, evening: null };
+    for (const slot of shape.slots) {
+      const col = shape.bySlot ? slot : 'all';
+      doses[slot] = shape.byDay ? shape.rows.map((r) => val(col, r)) : val(col, 'any');
+    }
+    return { shape, missing: [...new Set(missing)], fields: { prn: false, doses } };
+  }
+
+  function updateDoseSummary() {
+    const { shape, fields } = readDoses();
+    const text = shape.prn || !(shape.bySlot || shape.byDay) ? '' : Core.dosesText({ prn: false, doses: fields.doses });
+    $('#dose-summary').textContent = text;
+  }
+
+  // Show the fields that fit: as-needed meds have no meals or split doses.
+  function syncFormVisibility() {
+    const shape = doseShape();
+    $('#sched-block').hidden = shape.prn;
+    $('#dose-options').hidden = shape.prn;
+    $('#opt-slot').hidden = shape.slots.length !== 2;
+    renderDoseGrid();
+  }
+  form.addEventListener('change', (e) => { if (!e.target.dataset.col) syncFormVisibility(); });
+  form.addEventListener('input', (e) => {
+    if (!e.target.dataset.col) return;
+    cells[cellKey(e.target.dataset.col, e.target.dataset.row)] = e.target.value;
+    updateDoseSummary();
+  });
 
   function openMedForm(med) {
     form.reset();
@@ -399,11 +475,23 @@
     f.id.value = med ? med.id : '';
     f.name.value = med ? med.name : '';
     f.kind.value = v && v.prn ? 'prn' : 'scheduled';
-    f.morning.checked = v ? v.morning : true;
-    f.evening.checked = v ? v.evening : false;
-    f.doseMode.value = v && v.doseByDay ? 'byDay' : 'same';
-    f.dosage.value = v ? v.dose : '';
-    dayInputs().forEach((input, i) => { input.value = v && v.doseByDay ? v.doseByDay[i] : ''; });
+    f.morning.checked = v ? v.doses.morning != null : true;
+    f.evening.checked = v ? v.doses.evening != null : false;
+    f.bySlot.checked = Boolean(v && !v.prn && Core.variesBySlot(v));
+    f.byDay.checked = Boolean(v && !v.prn && SLOTS.some((s) => Core.variesByDay(v, s.id)));
+    // Load the saved doses into the boxes in the same layout the form will show.
+    cells = {};
+    if (v && v.prn) cells[cellKey('all', 'any')] = v.dose || '';
+    else if (v) {
+      for (const s of SLOTS) {
+        const spec = v.doses[s.id];
+        if (spec == null) continue;
+        const col = f.bySlot.checked ? s.id : 'all';
+        if (Array.isArray(spec)) spec.forEach((d, i) => { cells[cellKey(col, i)] = d; });
+        else if (f.byDay.checked) for (let i = 0; i < 7; i++) cells[cellKey(col, i)] = spec;
+        else cells[cellKey(col, 'any')] = spec;
+      }
+    }
     f.notes.value = med ? med.notes || '' : '';
     f.active.checked = med ? Boolean(med.active) : true;
     f.from.value = today;
@@ -425,22 +513,16 @@
     const f = form.elements;
     const name = f.name.value.trim();
     if (!name) return;
-    const prn = f.kind.value === 'prn';
-    const byDay = !prn && f.doseMode.value === 'byDay';
-    if (!prn && !f.morning.checked && !f.evening.checked) {
+    const { shape, missing, fields } = readDoses();
+    if (!shape.prn && shape.slots.length === 0) {
       toast('Pick breakfast, dinner, or both.');
       return;
     }
-    const days = dayInputs().map((i) => i.value.trim());
-    if (byDay && days.some((d) => !d)) {
-      const missing = days.map((d, i) => (d ? null : Core.WEEKDAY_NAMES[i])).filter(Boolean).join(', ');
-      toast(`Fill in a dose for every day (missing: ${missing}).`);
+    if (missing.length) {
+      toast(`Fill in every dose box (missing: ${missing.join(', ')}).`);
       return;
     }
-    const fields = {
-      prn, morning: !prn && f.morning.checked, evening: !prn && f.evening.checked,
-      dose: byDay ? '' : f.dosage.value.trim(), doseByDay: byDay ? days : null,
-    };
+    const split = shape.bySlot || shape.byDay;
     const basics = { name, notes: f.notes.value.trim(), active: f.active.checked };
     const today = todayKey();
     const id = f.id.value;
@@ -470,7 +552,8 @@
     } else {
       const order = liveMeds().reduce((max, x) => Math.max(max, x.order + 1), 0);
       const med = Core.newMed(uid(), { ...basics, ...fields }, order, today);
-      if (byDay && !confirm(`${name}: ${Core.scheduleSummary(med.schedule[0])}.\n\nSave this schedule?`)) return;
+      // A split dose is easy to mistype, so read it back before saving.
+      if (split && !confirm(`${name}: ${Core.scheduleSummary(med.schedule[0])}.\n\nSave this schedule?`)) return;
       state.meds.push(med);
     }
     save(); dialog.close(); render();
@@ -1106,7 +1189,7 @@
     // A repeating calendar event can't change by weekday, so day-of-week meds list their full pattern.
     const events = SLOTS.filter((s) => medsFor(s, todayKey()).length > 0).map((s) => {
       const list = medsFor(s, todayKey()).map(({ med, version }) => {
-        const d = Core.doseSummary(version);
+        const d = Core.slotDoseText(version, s.id); // this meal's dose only
         return med.name + (d ? ` (${d})` : '');
       }).join(', ');
       return [

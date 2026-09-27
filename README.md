@@ -3,8 +3,8 @@
 A small, installable web app for one job: knowing what to take with breakfast and dinner, and whether you already did.
 
 - **Today**: two cards, Morning and Evening. Tap a med to mark it taken (it stamps the time). Tap again to undo. "Take all" logs the whole slot. Use ‹ to fix a day you forgot to log.
-- **Meds**: add, edit, reorder, pause, delete. Scheduled with breakfast, dinner, or both, with one dose or a different dose each weekday. Or as needed (PRN).
-- **Doses by day and over time**: a med like warfarin can be 8 mg on Thursday and Sunday and 6 mg the rest of the week. Changing a dose starts on a day you pick; earlier days keep what applied then, and every logged dose keeps the dose it was logged at.
+- **Meds**: add, edit, reorder, pause, delete. Scheduled with breakfast, dinner, or both. Most meds have one dose; a med can instead have a different dose at each meal, a different dose each weekday, or both. Or as needed (PRN).
+- **Doses by meal, day and over time**: a med can be 200 mg at breakfast and 600 mg at dinner, or 8 mg on Thursday and Sunday and 6 mg the rest of the week, as one entry. Changing a dose starts on a day you pick; earlier days keep what applied then, and every logged dose keeps the dose it was logged at.
 - **As needed**: log a PRN med whenever you take it, as often as needed, at the time you took it. It's never "due" and never counts as missed.
 - **History**: last 30 days, adherence percent, day streak. Tap a day to open it.
 - **Settings**: breakfast and dinner times, sync between iPhone and Mac, push reminders, calendar reminders, JSON backup and restore.
@@ -22,7 +22,7 @@ No accounts to create, no server to run, no build step. Plain HTML, CSS and Java
 | `sw.js` | Service worker: offline cache, and shows push notifications with today's doses. |
 | `version.json` | The current release number. The app checks it on every open to catch updates. |
 | `scripts/send-push.mjs` | Sends the reminders. Run by GitHub Actions, not by you. |
-| `tests/` | Node tests for doses by day, schedule history, PRN, the merge, encryption, and reminder timing. `tests/fixtures/` holds the v1.1 sync code, to test old and new devices together. |
+| `tests/` | Node tests for doses by meal and day, schedule history, PRN, the merge, encryption, and reminder timing. `tests/fixtures/` holds the v1.1 and v2.0 sync code (to test old and new devices together) and the real medication list as dose patterns. Names are neutral because this repo is public; real names can go in `tests/private/names.json`, which git ignores. |
 
 ## Where it runs
 

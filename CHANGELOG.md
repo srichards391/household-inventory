@@ -2,6 +2,13 @@
 
 Point releases add. Whole numbers change something an old edition would notice.
 
+## v2.1 (09/26/2026)
+- **Different doses at breakfast and dinner.** A dose now depends on the meal as well as the weekday, in one model: each meal has its own dose, and any meal's dose can vary by weekday. So 200 mg at breakfast and 600 mg at dinner is one med, not two entries, and "all taken" counts it once per meal.
+- The form stays one dose box for most meds. Two options split it: "Different dose at breakfast and dinner" (a column per meal) and "Different dose on different days of the week" (a row per day). Split doses are read back for confirmation before saving.
+- Today tags doses that differ ("Breakfast dose", "Thursday dose", "Thursday dinner dose"). Logs, history, the push reminder and the calendar file all use the dose for that meal on that day.
+- Syncs with devices still on v2.0 or v1.1: they see a split dose written out in words ("200 mg breakfast · 600 mg dinner"), never one wrong number, and their older copy can't overwrite the split dose.
+- Tests: 75, including the full real medication list (dose patterns; names are neutral in the public repo, see tests/fixtures/med-list.js).
+
 ## v2.0 (09/26/2026)
 A whole-number release: the data format changed in ways a v1.1 device would notice. Update both devices.
 - **Day-of-week doses.** A med can have a different dose each weekday (e.g. warfarin 8 mg Thu and Sun, 6 mg other days). Today shows the dose for the date you're looking at, tagged with the weekday.
