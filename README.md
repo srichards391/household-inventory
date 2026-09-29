@@ -1,13 +1,13 @@
 # Meds
 
-A small, installable web app for one job: knowing what to take with breakfast and dinner, and whether you already did.
+A small, installable web app for one job: knowing what to take and when, and whether you already did.
 
-- **Today**: two cards, Morning and Evening. Tap a med to mark it taken (it stamps the time). Tap again to undo. "Take all" logs the whole slot. Use ‹ to fix a day you forgot to log.
-- **Meds**: add, edit, reorder, pause, delete. Scheduled with breakfast, dinner, or both. Most meds have one dose; a med can instead have a different dose at each meal, a different dose each weekday, or both. Or as needed (PRN).
+- **Today**: Morning, Afternoon and Evening cards. Tap a med to mark it taken (it stamps the time). Tap again to undo. "Take all" logs the whole slot. Use ‹ to fix a day you forgot to log.
+- **Meds**: add, edit, reorder, pause, delete. Scheduled at any mix of morning, afternoon and evening. Most meds have one dose; a med can instead have a different dose at each time of day, a different dose each weekday, or both. Or as needed (PRN), with an optional daily limit ("up to 2 a day") that Today enforces.
 - **Doses by meal, day and over time**: a med can be 200 mg at breakfast and 600 mg at dinner, or 8 mg on Thursday and Sunday and 6 mg the rest of the week, as one entry. Changing a dose starts on a day you pick; earlier days keep what applied then, and every logged dose keeps the dose it was logged at.
 - **As needed**: log a PRN med whenever you take it, as often as needed, at the time you took it. It's never "due" and never counts as missed.
 - **History**: last 30 days, adherence percent, day streak. Tap a day to open it.
-- **Settings**: breakfast and dinner times, sync between iPhone and Mac, push reminders, calendar reminders, JSON backup and restore.
+- **Settings**: reminder times for each slot, sync between iPhone and Mac, push reminders, calendar reminders, JSON backup and restore.
 
 No accounts to create, no server to run, no build step. Plain HTML, CSS and JavaScript, so it's readable end to end.
 
@@ -66,9 +66,9 @@ Dose and schedule changes merge one version at a time: change warfarin's dose on
 
 ### Push notifications (v1.1)
 
-GitHub Actions sends a push notification at breakfast and dinner. Tapping it opens Today.
+GitHub Actions sends a push notification at each reminder time (morning, afternoon, evening). Tapping it opens Today.
 
-- Times live in `.github/workflows/push-reminders.yml` (`MORNING_TIME`, `EVENING_TIME`, New York time), **not** in the app. The app's Settings times are for "due" status and the calendar file. Keep them matching. The workflow file explains how to change the cron lines.
+- Times live in `.github/workflows/push-reminders.yml` (`MORNING_TIME`, `AFTERNOON_TIME`, `EVENING_TIME`, New York time), **not** in the app. The app's Settings times are for "due" status and the calendar file. Keep them matching. The workflow file explains how to change the cron lines.
 - The app never sends anything itself. It subscribes, and you paste the subscription into the repo secret `PUSH_SUBSCRIPTION` (one object, or a JSON list `[ ... , ... ]` for iPhone and Mac). The private key is the repo secret `VAPID_PRIVATE_KEY`.
 - GitHub can't see your meds, so it sends a plain "Morning meds" signal. When it arrives, your device fills in the meds and doses still to take for that slot today (e.g. "With dinner: Warfarin 8 mg. Tap to log."), from its own copy of your data. As-needed meds are never included. If it can't read that copy it falls back to "With breakfast. Tap to log." Note this puts med names on the lock screen; to hide them, iPhone Settings → Notifications → Meds → Show Previews → When Unlocked.
 - If a device's subscription expires, the workflow run fails with "Subscription expired…" and GitHub emails you. Re-enable push in Settings and update the secret.
@@ -81,7 +81,7 @@ GitHub Actions sends a push notification at breakfast and dinner. Tapping it ope
 1. Settings → Reminders → **Get file** (do this in Safari, not the home-screen app).
 2. Open the downloaded `meds-reminders.ics` and tap **Add All**.
 
-You get two daily events with alerts at your breakfast and dinner times. Each one links back to the app. If you change the times later, delete the two events and get a fresh file.
+You get one daily event per time of day you use, with alerts at the times in Settings. Each one links back to the app. If you change the times later, delete the old events and get a fresh file.
 
 ## Updating an installed copy
 

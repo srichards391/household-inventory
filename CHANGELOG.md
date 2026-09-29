@@ -2,6 +2,15 @@
 
 Point releases add. Whole numbers change something an old edition would notice.
 
+## v3.0 (09/29/2026)
+A whole-number release: a v2.1 device syncing with a v3.0 one never sees an afternoon dose as due. Update both devices.
+- **Afternoon slot.** Today now has Morning, Afternoon and Evening cards. A med can be scheduled in any mix of the three, with its own dose per slot as before. Default afternoon reminder time 2:00 PM (Settings), with its own calendar alert and push reminder (two new cron lines in `push-reminders.yml`, `AFTERNOON_TIME`).
+- **Daily limit for as-needed meds.** "Most doses in a day" on an as-needed med (e.g. up to 2). Today shows "1 of 2 today" on its + button and stops at the limit; removing a dose frees it again. The limit is part of the schedule history, so changing it starts on a chosen day.
+- Reminder text: "This afternoon: Lithium 300 mg. Tap to log."
+- Sync: a copy written by a v2.1 device lacks the afternoon dose and the daily limit. The full copy always wins that tie (the merge now looks inside a version's doses), and a v2.1 device leaves the full copy on the gist. Tested against the real v2.1 core (tests/fixtures/sync-core-v2.1.js).
+- Removed docs/HANDOFF_v1.1.md: that work shipped in v1.1 and v2.0.
+- Tests: 89.
+
 ## v2.1 (09/26/2026)
 - **Different doses at breakfast and dinner.** A dose now depends on the meal as well as the weekday, in one model: each meal has its own dose, and any meal's dose can vary by weekday. So 200 mg at breakfast and 600 mg at dinner is one med, not two entries, and "all taken" counts it once per meal.
 - The form stays one dose box for most meds. Two options split it: "Different dose at breakfast and dinner" (a column per meal) and "Different dose on different days of the week" (a row per day). Split doses are read back for confirmation before saving.

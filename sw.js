@@ -1,18 +1,18 @@
 // Service worker: caches the app shell so Meds opens instantly and works offline,
-// and shows the breakfast and dinner push reminders sent by GitHub Actions.
+// and shows the push reminders sent by GitHub Actions.
 //
 // Updates: bump CACHE_VERSION (and the ?v= below, and APP_VERSION in app.js) whenever app
 // files change. The browser notices this file changed, installs the new worker, and it takes
 // over at once (skipWaiting + claim); app.js then reloads the page onto the new code.
-const CACHE_VERSION = 'meds-v2.1.0';
+const CACHE_VERSION = 'meds-v3.0.0';
 const DATA_CACHE = 'meds-data'; // the app's copy of your meds for reminder text; survives updates
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=2.1',
-  './config.js?v=2.1',
-  './sync-core.js?v=2.1',
-  './app.js?v=2.1',
+  './styles.css?v=3.0',
+  './config.js?v=3.0',
+  './sync-core.js?v=3.0',
+  './app.js?v=3.0',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -20,7 +20,7 @@ const SHELL = [
 ];
 
 // Same dose logic as the app, for "Warfarin 8 mg" in the reminder.
-importScripts('./sync-core.js?v=2.1');
+importScripts('./sync-core.js?v=3.0');
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

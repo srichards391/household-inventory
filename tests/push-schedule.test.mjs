@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { dueSlot, minutesFromTarget, parseHHMM, parseSubscriptions } from '../scripts/push-schedule.mjs';
 
-const TIMES = { morning: '08:00', evening: '18:00' };
+const TIMES = { morning: '08:00', afternoon: '14:00', evening: '18:00' };
 
 // Read the cron lines straight from the workflow so the test breaks if they drift.
 const yml = fs.readFileSync(new URL('../.github/workflows/push-reminders.yml', import.meta.url), 'utf8');
@@ -23,14 +23,14 @@ const DAYS = {
 };
 
 test('workflow has two cron lines per reminder', () => {
-  assert.equal(crons.length, 4);
+  assert.equal(crons.length, 6);
 });
 
 for (const [name, day] of Object.entries(DAYS)) {
   for (const delay of [0, 15, 30, 40]) {
-    test(`${name}, runs ${delay} min late: exactly one morning and one evening send`, () => {
+    test(`${name}, runs ${delay} min late: exactly one morning, afternoon and evening send`, () => {
       const sent = runsOn(day, delay).map((d) => dueSlot(d, TIMES)).filter(Boolean).sort();
-      assert.deepEqual(sent, ['evening', 'morning']);
+      assert.deepEqual(sent, ['afternoon', 'evening', 'morning']);
     });
   }
 }
@@ -38,7 +38,7 @@ for (const [name, day] of Object.entries(DAYS)) {
 test('a run more than 45 minutes late sends nothing rather than risk a double', () => {
   for (const day of Object.values(DAYS)) {
     const sent = runsOn(day, 50).map((d) => dueSlot(d, TIMES)).filter(Boolean);
-    assert.ok(sent.length <= 2 && new Set(sent).size === sent.length, 'never two of the same slot');
+    assert.ok(sent.length <= 3 && new Set(sent).size === sent.length, 'never two of the same slot');
   }
 });
 

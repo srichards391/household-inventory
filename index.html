@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Meds</title>
-  <meta name="description" content="A simple daily medication log: what to take with breakfast and dinner, and whether you already did.">
+  <meta name="description" content="A simple daily medication log: what to take through the day, and whether you already did.">
   <meta name="theme-color" content="#1D7398">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -13,7 +13,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="./styles.css?v=2.1">
+  <link rel="stylesheet" href="./styles.css?v=3.0">
 </head>
 <body>
   <header class="topbar">
@@ -47,13 +47,20 @@
         <fieldset>
           <legend>When</legend>
           <label class="check"><input type="checkbox" name="morning"> Morning, with breakfast</label>
+          <label class="check"><input type="checkbox" name="afternoon"> Afternoon</label>
           <label class="check"><input type="checkbox" name="evening"> Evening, with dinner</label>
         </fieldset>
       </div>
       <!-- One dose box in the usual case. The options below split it by meal, by weekday, or both. -->
       <div id="dose-grid" class="dose-grid"></div>
+      <div id="prn-block" hidden>
+        <label>Most doses in a day (optional)
+          <input name="maxPerDay" type="number" min="1" max="24" inputmode="numeric" placeholder="e.g. 2">
+          <small>Today stops you logging more than this. Leave blank for no limit.</small>
+        </label>
+      </div>
       <div id="dose-options" class="dose-options">
-        <label class="check" id="opt-slot"><input type="checkbox" name="bySlot"> Different dose at breakfast and dinner</label>
+        <label class="check" id="opt-slot"><input type="checkbox" name="bySlot"> Different dose at different times of day</label>
         <label class="check"><input type="checkbox" name="byDay"> Different dose on different days of the week</label>
       </div>
       <div class="dose-summary" id="dose-summary" aria-live="polite"></div>
@@ -98,8 +105,8 @@
 
   <!-- ?v= makes each release a new address, so no cache can hand back an older copy.
        Bump with APP_VERSION in app.js (tests/dosing.test.js checks they match). -->
-  <script src="./config.js?v=2.1"></script>
-  <script src="./sync-core.js?v=2.1"></script>
-  <script src="./app.js?v=2.1"></script>
+  <script src="./config.js?v=3.0"></script>
+  <script src="./sync-core.js?v=3.0"></script>
+  <script src="./app.js?v=3.0"></script>
 </body>
 </html>

@@ -1,9 +1,9 @@
-// Sends the Meds breakfast or dinner push reminder to every subscribed device.
+// Sends the Meds morning, afternoon or evening push reminder to every subscribed device.
 // Run by .github/workflows/push-reminders.yml. Reads:
 //   VAPID_PRIVATE_KEY  repo secret, private half of the key pair (public half is in ../config.js)
 //   PUSH_SUBSCRIPTION  repo secret, one subscription object or an array of them
-//   MORNING_TIME, EVENING_TIME  HH:MM in New York time
-//   FORCE_SLOT         morning or evening: send right now (manual test run). Empty on scheduled runs.
+//   MORNING_TIME, AFTERNOON_TIME, EVENING_TIME  HH:MM in New York time
+//   FORCE_SLOT         morning, afternoon or evening: send right now (manual test run). Empty on scheduled runs.
 import { createRequire } from 'node:module';
 import webpush from 'web-push';
 import { dueSlot, MESSAGES, parseSubscriptions, TIME_ZONE } from './push-schedule.mjs';
@@ -18,14 +18,14 @@ function fail(msg) {
 
 const forced = (env.FORCE_SLOT || '').trim();
 const now = new Date();
-const slot = forced || dueSlot(now, { morning: env.MORNING_TIME || '08:00', evening: env.EVENING_TIME || '18:00' });
+const slot = forced || dueSlot(now, { morning: env.MORNING_TIME || '08:00', afternoon: env.AFTERNOON_TIME || '14:00', evening: env.EVENING_TIME || '18:00' });
 const nyTime = now.toLocaleTimeString('en-US', { timeZone: TIME_ZONE, hour: 'numeric', minute: '2-digit' });
 
 if (!slot) {
   console.log(`Nothing to send: it is ${nyTime} in New York, not near a reminder time. (This is normal; each reminder has two cron lines and only one matches.)`);
   process.exit(0);
 }
-if (!MESSAGES[slot]) fail(`Unknown slot "${slot}". Use morning or evening.`);
+if (!MESSAGES[slot]) fail(`Unknown slot "${slot}". Use morning, afternoon or evening.`);
 if (!env.VAPID_PRIVATE_KEY) fail('The VAPID_PRIVATE_KEY secret is missing. Add it under repo Settings → Secrets and variables → Actions.');
 
 let subs;

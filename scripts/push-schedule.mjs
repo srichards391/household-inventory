@@ -35,9 +35,12 @@ export function minutesFromTarget(date, hhmm, timeZone = TIME_ZONE) {
   return d;
 }
 
-// Returns 'morning', 'evening', or null.
+export const SLOT_IDS = ['morning', 'afternoon', 'evening'];
+
+// Returns 'morning', 'afternoon', 'evening', or null.
 export function dueSlot(date, times, timeZone = TIME_ZONE) {
-  for (const slot of ['morning', 'evening']) {
+  for (const slot of SLOT_IDS) {
+    if (!times[slot]) continue;
     const d = minutesFromTarget(date, times[slot], timeZone);
     if (d >= -WINDOW_BEFORE_MIN && d <= WINDOW_AFTER_MIN) return slot;
   }
@@ -46,6 +49,7 @@ export function dueSlot(date, times, timeZone = TIME_ZONE) {
 
 export const MESSAGES = {
   morning: { title: 'Morning meds', body: 'With breakfast. Tap to log.' },
+  afternoon: { title: 'Afternoon meds', body: 'Time for your afternoon meds. Tap to log.' },
   evening: { title: 'Evening meds', body: 'With dinner. Tap to log.' },
 };
 

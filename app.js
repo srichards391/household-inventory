@@ -1,4 +1,4 @@
-/* Meds v2.1
+/* Meds v3.0
  * A single-file, no-build web app. Data lives in localStorage on this device and, if sync is
  * turned on, in an encrypted private GitHub Gist shared by your devices.
  * Sections: storage, date helpers, rendering per tab, medication form, as-needed log,
@@ -11,15 +11,17 @@
 
   // When releasing: bump this, VERSION in sync-core.js, CACHE_VERSION in sw.js, version.json,
   // and every ?v= in index.html and sw.js. tests/dosing.test.js fails if any disagree.
-  const APP_VERSION = '2.1';
+  const APP_VERSION = '3.0';
   const STORE_KEY = 'meds.v2';
   const OLD_STORE_KEY = 'meds.v1'; // left in place after migrating, as a just-in-case copy
   const SYNC_KEY = 'meds.sync';    // token, passphrase, gist id. This device only: never synced or exported.
   const Core = window.MedsSyncCore;
   const SLOTS = [
     { id: 'morning', title: 'Morning', meal: 'with breakfast', icon: '☀️', settingKey: 'breakfast', defaultTime: '08:00' },
+    { id: 'afternoon', title: 'Afternoon', meal: 'midday', icon: '🌤️', settingKey: 'afternoon', defaultTime: '14:00' },
     { id: 'evening', title: 'Evening', meal: 'with dinner', icon: '🌙', settingKey: 'dinner', defaultTime: '18:00' },
   ];
+  const SLOT_LABEL = { morning: 'Breakfast', afternoon: 'Afternoon', evening: 'Dinner' };
 
   // Half-updated install (new page, old script, or the reverse): show nothing about doses.
   // Mixed versions could compute a dose with the wrong rules.
@@ -205,7 +207,7 @@
       screen.appendChild(el(`
         <div class="card"><div class="empty">
           <strong>No medications yet</strong>
-          Add your meds under the Meds tab and they will show up here, sorted into breakfast and dinner.
+          Add your meds under the Meds tab and they will show up here, sorted by time of day.
         </div></div>`));
       const go = el(`<button class="btn primary block">Add a medication</button>`);
       go.onclick = () => { location.hash = '#meds'; setTimeout(openMedForm, 50); };
@@ -236,10 +238,10 @@
         // Taken: show the dose saved with the log. Not taken: the dose scheduled for this date.
         const shownDose = shownTakenAt ? Core.loggedDose(state, key, slot.id, m) : dose;
         // Say which way this dose is special, so a different number than yesterday or than the
-        // other meal reads as intended: "Thursday dose", "Breakfast dose", "Thursday dinner dose".
+        // other time of day reads as intended: "Thursday dose", "Breakfast dose", "Thursday dinner dose".
         const byDay = Core.variesByDay(version, slot.id);
         const bySlot = Core.variesBySlot(version);
-        const tag = [byDay ? weekday : '', bySlot ? (byDay ? Core.SLOT_NAMES[slot.id] : slot.id === 'morning' ? 'Breakfast' : 'Dinner') : ''].filter(Boolean).join(' ');
+        const tag = [byDay ? weekday : '', bySlot ? (byDay ? Core.SLOT_NAMES[slot.id] : SLOT_LABEL[slot.id]) : ''].filter(Boolean).join(' ');
         const changed = shownTakenAt && shownDose !== dose;
         const meta = [
           shownDose ? `<span class="dose">${esc(shownDose)}</span>` : '',
@@ -285,7 +287,8 @@
     screen.appendChild(el(`<div class="note">Tap a med to mark it taken. Tap again to undo. Use ‹ to log a day you forgot to record. Doses shown are the ones scheduled for this date.</div>`));
   }
 
-  // As-needed meds: not due, never missed. Log each dose when you take it, as often as needed.
+  // As-needed meds: not due, never missed. Log each dose when you take it. A med with a daily
+  // limit ("up to 2 a day") shows how many are logged and stops at the limit.
   function renderPrnCard(key, isToday) {
     const meds = Core.prnMeds(state, key);
     const logs = Core.prnLogs(state, key);
@@ -312,7 +315,9 @@
     if (meds.length) {
       const foot = el(`<div class="card-foot prn-buttons"></div>`);
       for (const m of meds) {
-        const b = el(`<button class="btn">+ ${esc(m.name)}</button>`);
+        const { count, max, atMax } = Core.prnStatus(state, m, key);
+        const label = max ? `+ ${esc(m.name)} <span class="prn-count">${count} of ${max} today</span>` : `+ ${esc(m.name)}`;
+        const b = el(`<button class="btn" ${atMax ? 'disabled title="Daily limit reached"' : ''}>${label}</button>`);
         b.onclick = () => openPrnForm(m, key);
         foot.appendChild(b);
       }
@@ -377,17 +382,17 @@
   const form = $('#med-form');
   const delBtn = $('#med-delete');
 
-  // The dose boxes. Usually one box. "Different dose at breakfast and dinner" splits it into a
-  // column per meal; "Different dose on different days" into a row per weekday; both gives a
+  // The dose boxes. Usually one box. "Different dose at different times of day" splits it into a
+  // column per slot; "Different dose on different days" into a row per weekday; both gives a
   // 7 x 2 grid. What you typed is kept when you switch, and fills the new boxes.
-  let cells = {}; // "col|row" -> text. col: 'all', 'morning' or 'evening'. row: 'any' or 0..6.
+  let cells = {}; // "col|row" -> text. col: 'all' or a slot id. row: 'any' or 0..6.
   const cellKey = (col, row) => `${col}|${row}`;
 
   function doseShape() {
     const f = form.elements;
     const prn = f.kind.value === 'prn';
     const slots = prn ? [] : SLOTS.filter((s) => f[s.id].checked).map((s) => s.id);
-    const bySlot = slots.length === 2 && f.bySlot.checked;
+    const bySlot = slots.length >= 2 && f.bySlot.checked;
     const byDay = slots.length > 0 && f.byDay.checked;
     return { prn, slots, bySlot, byDay, cols: bySlot ? slots : ['all'], rows: byDay ? [0, 1, 2, 3, 4, 5, 6] : ['any'] };
   }
@@ -401,7 +406,6 @@
     return '';
   }
 
-  const SLOT_LABEL = { morning: 'Breakfast', evening: 'Dinner' };
   function renderDoseGrid() {
     const shape = doseShape();
     const grid = $('#dose-grid');
@@ -436,8 +440,8 @@
       }
       return v;
     };
-    if (shape.prn) return { shape, missing, fields: { prn: true, dose: val('all', 'any') } };
-    const doses = { morning: null, evening: null };
+    if (shape.prn) return { shape, missing, fields: { prn: true, dose: val('all', 'any'), maxPerDay: form.elements.maxPerDay.value } };
+    const doses = Object.fromEntries(Core.SLOT_IDS.map((s) => [s, null]));
     for (const slot of shape.slots) {
       const col = shape.bySlot ? slot : 'all';
       doses[slot] = shape.byDay ? shape.rows.map((r) => val(col, r)) : val(col, 'any');
@@ -456,10 +460,14 @@
     const shape = doseShape();
     $('#sched-block').hidden = shape.prn;
     $('#dose-options').hidden = shape.prn;
-    $('#opt-slot').hidden = shape.slots.length !== 2;
+    $('#prn-block').hidden = !shape.prn;
+    $('#opt-slot').hidden = shape.slots.length < 2;
     renderDoseGrid();
   }
-  form.addEventListener('change', (e) => { if (!e.target.dataset.col) syncFormVisibility(); });
+  // Only the fields that change the form's shape redraw the dose boxes. (Redrawing on every
+  // change, e.g. the name field's, replaced the dose box just as you tapped into it.)
+  const SHAPE_FIELDS = new Set(['kind', 'bySlot', 'byDay', ...SLOTS.map((s) => s.id)]);
+  form.addEventListener('change', (e) => { if (SHAPE_FIELDS.has(e.target.name)) syncFormVisibility(); });
   form.addEventListener('input', (e) => {
     if (!e.target.dataset.col) return;
     cells[cellKey(e.target.dataset.col, e.target.dataset.row)] = e.target.value;
@@ -475,8 +483,8 @@
     f.id.value = med ? med.id : '';
     f.name.value = med ? med.name : '';
     f.kind.value = v && v.prn ? 'prn' : 'scheduled';
-    f.morning.checked = v ? v.doses.morning != null : true;
-    f.evening.checked = v ? v.doses.evening != null : false;
+    for (const s of SLOTS) f[s.id].checked = v ? v.doses[s.id] != null : s.id === 'morning';
+    f.maxPerDay.value = v && v.prn && v.maxPerDay ? v.maxPerDay : '';
     f.bySlot.checked = Boolean(v && !v.prn && Core.variesBySlot(v));
     f.byDay.checked = Boolean(v && !v.prn && SLOTS.some((s) => Core.variesByDay(v, s.id)));
     // Load the saved doses into the boxes in the same layout the form will show.
@@ -515,7 +523,7 @@
     if (!name) return;
     const { shape, missing, fields } = readDoses();
     if (!shape.prn && shape.slots.length === 0) {
-      toast('Pick breakfast, dinner, or both.');
+      toast('Pick at least one time of day.');
       return;
     }
     if (missing.length) {
@@ -729,7 +737,7 @@
     screen.appendChild(pushCard());
     const rem = el(`
       <div class="card">
-        <div class="settings-row"><div class="l">Calendar reminders <small>Two daily alerts at the times above. Each one opens this app. Works even if push doesn't.</small></div>
+        <div class="settings-row"><div class="l">Calendar reminders <small>A daily alert for each time of day you use, at the times above. Each one opens this app. Works even if push doesn't.</small></div>
           <button class="btn">Get file</button></div>
         <div class="note">
           On iPhone: tap Get file, open it from Files or the download bar, then <strong>Add All</strong>. Do this from Safari rather than the home-screen app.
@@ -1067,7 +1075,7 @@
     const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
     const card = el(`
       <div class="card">
-        <div class="settings-row"><div class="l">Push reminders <small>A notification at breakfast and dinner, sent by GitHub. Tap it to open Today.</small></div>
+        <div class="settings-row"><div class="l">Push reminders <small>A notification at each reminder time (breakfast, afternoon, dinner), sent by GitHub. Tap it to open Today.</small></div>
           <button class="btn primary" ${supported ? '' : 'disabled'}>Enable</button></div>
         <div class="push-out" hidden>
           <div class="note">Copy this and paste it into the repo secret <code>PUSH_SUBSCRIPTION</code> (GitHub → household-inventory → Settings → Secrets and variables → Actions).
